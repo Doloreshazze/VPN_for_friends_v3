@@ -1,6 +1,6 @@
 package com.playeverywhere999.vpn_for_friends_v3
 
-import android.Manifest // <-- Добавлен импорт
+import android.Manifest // <-- проверка связи
 import android.app.Activity
 import android.content.Intent
 import android.content.pm.PackageManager // <-- Добавлен импорт
