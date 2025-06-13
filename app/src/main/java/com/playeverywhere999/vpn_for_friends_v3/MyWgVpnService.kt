@@ -12,6 +12,7 @@ import android.os.ParcelFileDescriptor
 import android.util.Log
 import androidx.core.app.NotificationCompat // Для createNotification
 import java.io.StringReader // Added import
+import java.io.BufferedReader // Added import
 import com.wireguard.config.BadConfigException // Added import
 import java.io.IOException // Added import
 import androidx.lifecycle.MutableLiveData
@@ -97,7 +98,7 @@ class MyWgVpnService : VpnService(), ViewModelStoreOwner { // Реализуем
                 }
 
                 try {
-                    val parsedConfig = Config.parse(StringReader(configString)) // <<< Removed .Companion
+                    val parsedConfig = Config.parse(BufferedReader(StringReader(configString))) // Wrapped with BufferedReader
                     this.currentWgConfig = parsedConfig // Store for disconnect and other uses
                     connectTunnel(parsedConfig)
                 } catch (e: BadConfigException) {
