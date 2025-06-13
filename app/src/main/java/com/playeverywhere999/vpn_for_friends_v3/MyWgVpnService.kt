@@ -11,6 +11,9 @@ import android.os.Build
 import android.os.ParcelFileDescriptor
 import android.util.Log
 import androidx.core.app.NotificationCompat // Для createNotification
+import java.io.StringReader // Added import
+import com.wireguard.config.BadConfigException // Added import
+import java.io.IOException // Added import
 import androidx.lifecycle.MutableLiveData
 import androidx.lifecycle.ViewModelProvider // Добавлен импорт
 import androidx.lifecycle.ViewModelStore // Добавлен импорт
@@ -85,7 +88,29 @@ class MyWgVpnService : VpnService(), ViewModelStoreOwner { // Реализуем
         when (intent?.action) {
             ACTION_CONNECT -> {
                 Log.i(TAG, "Action connect received")
-                connectTunnel()
+                val configString = intent.getStringExtra(EXTRA_WG_CONFIG_STRING)
+                if (configString == null) {
+                    Log.e(TAG, "Connect action received but no config string provided.")
+                    vpnError.postValue("Configuration string not provided in Intent.")
+                    tunnelStatus.postValue(Tunnel.State.DOWN)
+                    return START_NOT_STICKY
+                }
+
+                try {
+                    val parsedConfig = Config.Companion.parse(StringReader(configString))
+                    this.currentWgConfig = parsedConfig // Store for disconnect and other uses
+                    connectTunnel(parsedConfig)
+                } catch (e: BadConfigException) {
+                    Log.e(TAG, "Invalid WireGuard configuration", e)
+                    vpnError.postValue("Invalid WireGuard configuration: ${e.message}")
+                    tunnelStatus.postValue(Tunnel.State.DOWN)
+                    // Depending on desired behavior, could call stopSelf() or just return
+                } catch (e: IOException) {
+                    Log.e(TAG, "Error reading WireGuard configuration", e)
+                    vpnError.postValue("Error reading WireGuard configuration: ${e.message}")
+                    tunnelStatus.postValue(Tunnel.State.DOWN)
+                    // Depending on desired behavior, could call stopSelf() or just return
+                }
             }
             ACTION_DISCONNECT -> {
                 Log.i(TAG, "Action disconnect received")
@@ -106,7 +131,7 @@ class MyWgVpnService : VpnService(), ViewModelStoreOwner { // Реализуем
         return START_NOT_STICKY
     }
 
-    private fun connectTunnel() {
+    private fun connectTunnel(config: Config) { // <<< MODIFIED SIGNATURE
         Log.d(TAG, "Attempting to connect tunnel...")
 
         if (tunnelStatus.value == Tunnel.State.UP) {
@@ -121,21 +146,21 @@ class MyWgVpnService : VpnService(), ViewModelStoreOwner { // Реализуем
             return
         }
 
-        currentWgConfig = vpnViewModel.preparedConfig.value
-        if (currentWgConfig == null) {
-            Log.e(TAG, "WireGuard configuration is not available from ViewModel.")
-            vpnError.postValue("Configuration not prepared. Please load/reload configuration first.")
-            tunnelStatus.postValue(Tunnel.State.DOWN)
-            // Не останавливаем сервис, чтобы пользователь мог загрузить конфиг и попробовать снова.
-            return
+        // The VpnViewModel is no longer used to fetch the config here.
+        // The 'config' parameter is used directly.
+        // this.currentWgConfig should have been set by the caller (onStartCommand)
+        if (this.currentWgConfig == null || this.currentWgConfig != config) {
+            Log.w(TAG, "Member currentWgConfig is not set or differs from passed config. Updating member.")
+            this.currentWgConfig = config // Ensure member is updated.
         }
-        Log.d(TAG, "Using config: ${currentWgConfig?.getInterface()?.getAddresses()}")
+
+        Log.d(TAG, "Using config passed to connectTunnel: ${config.getInterface().getAddresses()}")
 
         val builder = Builder()
         builder.setSession(getString(R.string.app_name)) // Используйте имя вашего приложения
 
         try {
-            val wgInterface = currentWgConfig!!.getInterface() // Non-null asserted due to check above
+            val wgInterface = config.getInterface() // Use the passed 'config' parameter
 
             // 1. Установка адресов интерфейса
             wgInterface.getAddresses().forEach { addr ->
@@ -226,7 +251,7 @@ class MyWgVpnService : VpnService(), ViewModelStoreOwner { // Реализуем
                 // GoBackend.turnOn() или backend.setState()
                 // wg-quick-go использует wgTurnOn(ifName, fd, settings)
                 // WireGuard Android library использует backend.setState
-                backend!!.setState(currentTunnel!!, Tunnel.State.UP, currentWgConfig!!)
+                backend!!.setState(currentTunnel!!, Tunnel.State.UP, config) // Use 'config' parameter
 
                 Log.i(TAG, "GoBackend instructed to bring tunnel UP.")
                 // Фактическое состояние UP придет через колбэк MyWgTunnel.onStateChange
