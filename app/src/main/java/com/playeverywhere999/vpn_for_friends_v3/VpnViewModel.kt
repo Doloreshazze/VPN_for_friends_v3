@@ -74,14 +74,14 @@ class VpnViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun createAndPrepareConfig() {
-        val clientPrivateKeyString = "uGSNvaG69WImrmYTut0i4XH8Pa2VMljuLc391ZJ5EHE="
-        val clientAddressString = "10.0.0.2/32"
+        val clientPrivateKeyString = "qMUVBNevBEcl1U8fAdOOT5K6QKRy+2XXGNGEKnC2Blk="
+        val clientAddressString = "10.0.1.2/32"
         val dnsServerString = "1.1.1.1"
         val serverPublicKeyString = "k6eSEKXjyj+awlgCqLX2q8e8Y9YZox8nzYHh31p5THs="
-        val serverEndpointString = "192.168.50.206"
+        val serverEndpointString = "192.168.50.206:51820"
         val allowedIpsString = "0.0.0.0/0"
 
-        if (clientPrivateKeyString == "qMUVBNevBEcl1U8fAdOOT5K6QKRy+2XXGNGEKnC2Blk=" ||
+        /*if (clientPrivateKeyString == "qMUVBNevBEcl1U8fAdOOT5K6QKRy+2XXGNGEKnC2Blk=" ||
             serverPublicKeyString == "k6eSEKXjyj+awlgCqLX2q8e8Y9YZox8nzYHh31p5THs=" ||
             serverEndpointString == "10.0.1.2/32" // Пример неверного значения для проверки
         ) {
@@ -90,12 +90,13 @@ class VpnViewModel(application: Application) : AndroidViewModel(application) {
             _preparedConfig.postValue(null)
             // resetConfigAndTunnel() // Этот метод тоже изменится
             return
-        }
+        }*/
 
         try {
             val clientPrivateKey = Key.fromBase64(clientPrivateKeyString)
             val serverPublicKey = Key.fromBase64(serverPublicKeyString)
             val clientKeyPair = KeyPair(clientPrivateKey)
+            Log.d("VpnViewModel", "Client Public Key: ${clientKeyPair.publicKey.toBase64()}")
             val clientAddress = InetNetwork.parse(clientAddressString)
             val dnsServer = InetAddress.getByName(dnsServerString)
             val allowedIps = InetNetwork.parse(allowedIpsString)
@@ -138,6 +139,10 @@ class VpnViewModel(application: Application) : AndroidViewModel(application) {
             _lastErrorMessage.postValue("Error creating config: ${e.message}")
             _preparedConfig.postValue(null)
         }
+    }
+
+    fun clearLastError() {
+        _lastErrorMessage.postValue(null) // или .value = null, если вы уверены, что вызывается из главного потока
     }
 
     // Этот метод теперь вызывается из MainActivity, когда сервис сообщает о новом состоянии или ошибке

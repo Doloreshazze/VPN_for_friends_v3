@@ -1,11 +1,12 @@
 package com.playeverywhere999.vpn_for_friends_v3
 
-import android.Manifest // <-- проверка связи
+import android.Manifest
 import android.app.Activity
+import android.app.AlertDialog
 import android.content.Intent
-import android.content.pm.PackageManager // <-- Добавлен импорт
+import android.content.pm.PackageManager
 import android.net.VpnService
-import android.os.Build // <-- Добавлен импорт
+import android.os.Build
 import android.os.Bundle
 import android.util.Log
 import android.widget.Toast
@@ -21,11 +22,11 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
-import androidx.core.content.ContextCompat // <-- Добавлен импорт
-import androidx.lifecycle.observe
-// import androidx.lifecycle.observe // Этот импорт не используется напрямую, можно удалить если нет других использований
+import androidx.core.content.ContextCompat
 import com.playeverywhere999.vpn_for_friends_v3.ui.theme.VPN_for_friends_v3Theme
 import com.wireguard.android.backend.Tunnel
+import com.wireguard.config.Config // Импорт для Config
+import java.io.IOException // Для обработки исключения от toWgQuickString()
 
 enum class VpnDisplayState {
     IDLE, CONNECTING, CONNECTED, DISCONNECTING, ERROR
@@ -41,8 +42,6 @@ class MainActivity : ComponentActivity() {
     ) { result ->
         if (result.resultCode == Activity.RESULT_OK) {
             Log.d("MainActivity", "VPN permission granted.")
-            // После получения разрешения VPN, проверяем разрешение на уведомления (если нужно)
-            // и затем запускаем сервис
             checkAndRequestPostNotificationPermissionThenConnect()
         } else {
             Log.w("MainActivity", "VPN permission denied.")
@@ -51,33 +50,22 @@ class MainActivity : ComponentActivity() {
         }
     }
 
-    // Лаунчер для запроса разрешения POST_NOTIFICATIONS
     private val requestPostNotificationPermissionLauncher = registerForActivityResult(
         ActivityResultContracts.RequestPermission()
     ) { isGranted: Boolean ->
         if (isGranted) {
             Log.d("MainActivity", "POST_NOTIFICATIONS permission granted.")
-            // Разрешение получено, теперь можно запускать сервис для подключения
             startVpnServiceConnectAction()
         } else {
-            Log.w("MainActivity", "POST_NOTIFICATIONS permission denied.")
-            Toast.makeText(this, "Notification permission denied. VPN notifications might not be shown.", Toast.LENGTH_LONG).show()
-            // Продолжаем подключение VPN, но уведомления могут не отображаться на Android 13+
-            // или сервис может столкнуться с проблемами при вызове startForeground
-            // В идеале, нужно предупредить пользователя о важности этого разрешения для стабильной работы.
-            // Для VPN сервис должен вызвать startForeground, иначе система его убьет.
-            // Если startForeground не сможет показать уведомление, это может привести к ForegroundServiceStartNotAllowedException
-            // Поэтому, хотя мы и продолжаем, это потенциально проблемное состояние.
-            // Рассмотрим вариант не стартовать VPN или показать более настойчивое предупреждение.
-            // Пока что просто продолжаем, но это место для улучшения UX.
-            startVpnServiceConnectAction() // Пытаемся запустить, но с возможными проблемами
+            Log.w("MainActivity", "POST_NOTIFICATIONS permission denied by user after request.")
+            Toast.makeText(this, "VPN не может быть запущен без разрешения на уведомления.", Toast.LENGTH_LONG).show()
+            vpnViewModel.setExternalVpnState(Tunnel.State.DOWN, "Notification permission denied, VPN cannot start.")
         }
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
 
-        // Подписки на LiveData из MyWgVpnService остаются без изменений
         MyWgVpnService.tunnelStatus.observe(this) { state ->
             Log.d("MainActivity", "Service tunnelStatus changed: $state")
             val currentError = MyWgVpnService.vpnError.value
@@ -157,57 +145,69 @@ class MainActivity : ComponentActivity() {
         val shouldConnect = effectiveStateForDecision == Tunnel.State.DOWN || currentErrorMessage != null
 
         if (shouldConnect) {
-            Log.d("MainActivity", "Intent to CONNECT. Current VM state: $currentVpnState, Prev stable: $previousStableBackendState")
+            Log.d("MainActivity", "Intent to CONNECT. Effective decision state: $effectiveStateForDecision, Error: $currentErrorMessage")
+            if (currentErrorMessage != null) {
+                vpnViewModel.clearLastError()
+            }
+
+            val preparedConfigObject: Config? = vpnViewModel.preparedConfig.value
+            if (preparedConfigObject == null) {
+                Log.e("MainActivity", "Configuration not prepared. Please load configuration first.")
+                Toast.makeText(this, "Configuration not loaded. Please Load/Reload first.", Toast.LENGTH_LONG).show()
+                vpnViewModel.setExternalVpnState(Tunnel.State.DOWN, "Configuration not loaded. Load/Reload first.")
+                return
+            }
+
             val vpnIntentPermission = VpnService.prepare(this)
             if (vpnIntentPermission != null) {
                 Log.d("MainActivity", "Requesting VPN permission.")
                 requestVpnPermissionLauncher.launch(vpnIntentPermission)
             } else {
                 Log.d("MainActivity", "VPN permission already granted.")
-                // Разрешение VPN есть, теперь проверяем разрешение на уведомления (если нужно)
-                // и затем запускаем сервис
                 checkAndRequestPostNotificationPermissionThenConnect()
             }
         } else {
-            Log.d("MainActivity", "Intent to DISCONNECT. Current VM state: $currentVpnState, Prev stable: $previousStableBackendState")
+            Log.d("MainActivity", "Intent to DISCONNECT. Effective decision state: $effectiveStateForDecision")
             Intent(this, MyWgVpnService::class.java).also {
-                it.action = MyWgVpnService.ACTION_DISCONNECT
-                startService(it) // Для disconnect startForegroundService не нужен, просто startService
+                it.action = MyWgVpnService.ACTION_DISCONNECT // Используем ACTION_DISCONNECT из MyWgVpnService
+                startService(it)
             }
             vpnViewModel.setIntermediateVpnState(Tunnel.State.TOGGLE)
         }
     }
 
-    // Новый метод для проверки и запроса разрешения на уведомления ПЕРЕД запуском сервиса для подключения
     private fun checkAndRequestPostNotificationPermissionThenConnect() {
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) { // Android 13 (API 33) и выше
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
             when {
                 ContextCompat.checkSelfPermission(
                     this,
                     Manifest.permission.POST_NOTIFICATIONS
                 ) == PackageManager.PERMISSION_GRANTED -> {
-                    // Разрешение уже есть
                     Log.d("MainActivity", "POST_NOTIFICATIONS permission already granted. Starting service.")
                     startVpnServiceConnectAction()
                 }
                 shouldShowRequestPermissionRationale(Manifest.permission.POST_NOTIFICATIONS) -> {
-                    // Пользователь ранее отказал. Показываем объяснение (опционально, но рекомендуется).
-                    // Здесь можно показать диалог с объяснением, зачем нужно разрешение.
-                    // После диалога снова запросить.
-                    // Для простоты пока просто запросим снова.
-                    Log.i("MainActivity", "Showing rationale for POST_NOTIFICATIONS and requesting again.")
-                    // TODO: Показать диалог с объяснением
-                    requestPostNotificationPermissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
+                    Log.i("MainActivity", "Showing rationale for POST_NOTIFICATIONS.")
+                    AlertDialog.Builder(this)
+                        .setTitle("Требуется разрешение на уведомления")
+                        .setMessage("Для стабильной работы VPN и отображения его статуса приложению необходимо разрешение на показ уведомлений. Без него VPN-сервис не сможет быть запущен корректно.")
+                        .setPositiveButton("Предоставить") { _, _ ->
+                            requestPostNotificationPermissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
+                        }
+                        .setNegativeButton("Отмена") { dialog, _ ->
+                            dialog.dismiss()
+                            Toast.makeText(this, "Разрешение на уведомления не предоставлено. VPN не будет запущен.", Toast.LENGTH_LONG).show()
+                            vpnViewModel.setExternalVpnState(Tunnel.State.DOWN, "Notification permission rationale declined, VPN not started.")
+                        }
+                        .setCancelable(false)
+                        .show()
                 }
                 else -> {
-                    // Запрашиваем разрешение в первый раз или если пользователь выбрал "Больше не спрашивать"
-                    // (в последнем случае лаунчер просто не сработает)
                     Log.d("MainActivity", "Requesting POST_NOTIFICATIONS permission.")
                     requestPostNotificationPermissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
                 }
             }
         } else {
-            // Для версий ниже Android 13 разрешение не требуется
             Log.d("MainActivity", "OS version < TIRAMISU, no need for POST_NOTIFICATIONS permission. Starting service.")
             startVpnServiceConnectAction()
         }
@@ -215,17 +215,43 @@ class MainActivity : ComponentActivity() {
 
     // Вынесенный метод для запуска сервиса с действием CONNECT
     private fun startVpnServiceConnectAction() {
-        Log.d("MainActivity", "Starting service to connect.")
-        Intent(this, MyWgVpnService::class.java).also {
-            it.action = MyWgVpnService.ACTION_CONNECT
-            // Используем startForegroundService для Android O и выше, если сервис планирует вызывать startForeground
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-                startForegroundService(it)
-            } else {
-                startService(it)
-            }
+        Log.d("MainActivity", "Preparing to start service to connect.")
+        val preparedConfigObject: Config? = vpnViewModel.preparedConfig.value
+
+        if (preparedConfigObject == null) {
+            Log.e("MainActivity", "startVpnServiceConnectAction: Configuration not prepared. Cannot start VPN service.")
+            Toast.makeText(this, "Configuration is missing. Please Load/Reload first.", Toast.LENGTH_LONG).show()
+            vpnViewModel.setExternalVpnState(Tunnel.State.DOWN, "Configuration missing, cannot start VPN.")
+            return // Не запускаем сервис, если нет конфигурации
         }
-        vpnViewModel.setIntermediateVpnState(Tunnel.State.TOGGLE)
+
+        try {
+            // Преобразуем объект Config в строку
+            // Убедитесь, что метод toWgQuickString() существует в вашей библиотеке wireguard-android
+            // и корректно обрабатывается. Он может выбрасывать IOException.
+            val configString = preparedConfigObject.toWgQuickString()
+
+            Log.d("MainActivity", "Starting service with ACTION_CONNECT and config string.")
+            val serviceIntent = Intent(this, MyWgVpnService::class.java).apply {
+                action = MyWgVpnService.ACTION_CONNECT // Используем ACTION_CONNECT из MyWgVpnService
+                putExtra(MyWgVpnService.EXTRA_WG_CONFIG_STRING, configString) // Передаем строку конфигурации
+            }
+
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                startForegroundService(serviceIntent)
+            } else {
+                startService(serviceIntent)
+            }
+            vpnViewModel.setIntermediateVpnState(Tunnel.State.TOGGLE) // Устанавливаем TOGGLE при начале подключения
+        } catch (e: IOException) {
+            Log.e("MainActivity", "Error converting configuration to string: ${e.message}", e)
+            Toast.makeText(this, "Error preparing configuration for VPN: ${e.message}", Toast.LENGTH_LONG).show()
+            vpnViewModel.setExternalVpnState(Tunnel.State.DOWN, "Error preparing configuration: ${e.message}")
+        } catch (e: Exception) { // Ловим другие возможные исключения от toWgQuickString или при работе с Intent
+            Log.e("MainActivity", "Unexpected error preparing to start VPN: ${e.message}", e)
+            Toast.makeText(this, "Unexpected error: ${e.message}", Toast.LENGTH_LONG).show()
+            vpnViewModel.setExternalVpnState(Tunnel.State.DOWN, "Unexpected error: ${e.message}")
+        }
     }
 
 
@@ -234,13 +260,15 @@ class MainActivity : ComponentActivity() {
         errorMessage: String?,
         lastKnownStableState: Tunnel.State
     ): VpnDisplayState {
-        // Логика без изменений
         Log.d("DisplayLogic", "currentVMState: $currentViewModelState, error: $errorMessage, lastKnownStable: $lastKnownStableState")
+
         if (!errorMessage.isNullOrEmpty()) {
             return VpnDisplayState.ERROR
         }
+
         return when (currentViewModelState) {
             Tunnel.State.DOWN -> VpnDisplayState.IDLE
+            Tunnel.State.UP -> VpnDisplayState.CONNECTED
             Tunnel.State.TOGGLE -> {
                 if (lastKnownStableState == Tunnel.State.DOWN) {
                     VpnDisplayState.CONNECTING
@@ -248,12 +276,10 @@ class MainActivity : ComponentActivity() {
                     VpnDisplayState.DISCONNECTING
                 }
             }
-            Tunnel.State.UP -> VpnDisplayState.CONNECTED
         }
     }
 }
 
-// VpnControlScreen и превью остаются без изменений
 @Composable
 fun VpnControlScreen(
     displayState: VpnDisplayState,
@@ -300,7 +326,7 @@ fun VpnControlScreen(
                     VpnDisplayState.CONNECTING -> "Connecting..."
                     VpnDisplayState.CONNECTED -> "Disconnect"
                     VpnDisplayState.DISCONNECTING -> "Disconnecting..."
-                    VpnDisplayState.ERROR -> "Retry Connect"
+                    VpnDisplayState.ERROR -> "Retry Connect" // или "Connect", если хотите всегда начинать с "чистого" подключения
                 }
                 Text(buttonText)
             }

@@ -40,6 +40,7 @@ class MyWgVpnService : VpnService(), ViewModelStoreOwner { // Реализуем
         private const val TAG = "MyWgVpnService"
         const val ACTION_CONNECT = "com.playeverywhere999.vpn.ACTION_CONNECT"
         const val ACTION_DISCONNECT = "com.playeverywhere999.vpn.ACTION_DISCONNECT"
+        const val EXTRA_WG_CONFIG_STRING = "com.playeverywhere999.vpn_for_friends_v3.EXTRA_WG_CONFIG_STRING"
         private const val NOTIFICATION_ID = 1 // Уникальный ID для уведомления
         private const val VPN_SERVICE_CHANNEL_ID = "VPN_SERVICE_CHANNEL"
         private const val TUNNEL_NAME_IN_SERVICE = "MyWgServiceTunnel"
