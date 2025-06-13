@@ -97,7 +97,7 @@ class MyWgVpnService : VpnService(), ViewModelStoreOwner { // Реализуем
                 }
 
                 try {
-                    val parsedConfig = Config.Companion.parse(StringReader(configString))
+                    val parsedConfig = Config.parse(StringReader(configString)) // <<< Removed .Companion
                     this.currentWgConfig = parsedConfig // Store for disconnect and other uses
                     connectTunnel(parsedConfig)
                 } catch (e: BadConfigException) {
