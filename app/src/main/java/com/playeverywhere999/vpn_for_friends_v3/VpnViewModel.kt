@@ -18,23 +18,7 @@ import com.wireguard.config.BadConfigException
 import com.wireguard.crypto.KeyFormatException
 import com.wireguard.crypto.KeyPair
 
-class MyWgTunnel(
-    private val tunnelName: String,
-    private val onTunnelStateChanged: (Tunnel.State) -> Unit,
-    // Добавляем возможность внешне вызывать onStateChange для сервиса
-    // чтобы GoBackend мог обновить состояние через этот колбэк,
-    // а сервис уже передал его в ViewModel
-    val externalOnStateChange: (Tunnel.State) -> Unit = onTunnelStateChanged
-) : Tunnel {
 
-    override fun getName(): String = tunnelName
-
-    override fun onStateChange(newState: Tunnel.State) {
-        Log.d("MyWgTunnel", "Tunnel '$tunnelName' state changed by GoBackend to: $newState")
-        // Используем внешний колбэк, который может быть связан с сервисом
-        externalOnStateChange(newState)
-    }
-}
 
 
 class VpnViewModel(application: Application) : AndroidViewModel(application) {
@@ -116,6 +100,7 @@ class VpnViewModel(application: Application) : AndroidViewModel(application) {
                 .setInterface(interfaceBuilder.build())
                 .addPeer(peerBuilder.build())
                 .build()
+            Log.d("VpnViewModel", "Config is created")
 
             currentWireGuardConfigForPreparation = config // Сохраняем для возможного использования
             _preparedConfig.postValue(config) // Публикуем готовую конфигурацию
