@@ -7,6 +7,8 @@ import android.app.PendingIntent
 import android.content.Intent
 import android.net.VpnService
 import android.os.Build
+import android.os.Handler // <-- Добавленный импорт
+import android.os.Looper  // <-- Добавленный импорт
 import android.os.ParcelFileDescriptor
 import android.util.Log
 import androidx.core.app.NotificationCompat
@@ -29,6 +31,12 @@ class MyWgVpnService : VpnService() {
     private var currentWgConfig: Config? = null
     private var vpnInterfaceFd: ParcelFileDescriptor? = null
 
+    private var connectAttemptsInThisLifecycle = 0
+    private var serviceStartIdForRetries: Int = 0
+
+    // Объявляем Handler для отложенных задач
+    private val retryHandler = Handler(Looper.getMainLooper()) // <-- Объявлен Handler
+
     companion object {
         const val ACTION_CONNECT = "com.playeverywhere999.vpn_for_friends_v3.ACTION_CONNECT"
         const val ACTION_DISCONNECT = "com.playeverywhere999.vpn_for_friends_v3.ACTION_DISCONNECT"
@@ -46,7 +54,6 @@ class MyWgVpnService : VpnService() {
         fun isServiceRunning(): Boolean = _serviceIsRunning.value ?: false
     }
 
-    // Метод для сброса текущей ошибки изнутри сервиса
     private fun clearCurrentError() {
         _vpnError.postValue(null)
     }
@@ -56,85 +63,116 @@ class MyWgVpnService : VpnService() {
         Log.d(TAG, "onCreate called")
         _serviceIsRunning.postValue(true)
         createNotificationChannel()
+        connectAttemptsInThisLifecycle = 0
         try {
             goBackend = GoBackend(this)
         } catch (e: Exception) {
-            Log.e(TAG, "Failed to initialize GoBackend", e)
+            Log.e(TAG, "Failed to initialize GoBackend in onCreate", e)
             _vpnError.postValue("Failed to initialize VPN backend: ${e.message}")
-            stopSelf()
-            return
         }
         _tunnelStatus.postValue(Tunnel.State.DOWN)
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
-        Log.d(TAG, "onStartCommand: action = ${intent?.action}")
-        clearCurrentError() // Сбрасываем ошибку при получении новой команды
+        Log.d(TAG, "onStartCommand: action = ${intent?.action}, startId = $startId")
+        serviceStartIdForRetries = startId
+        clearCurrentError()
+        // Отменяем предыдущие запланированные ретраи, если пользователь инициирует новое действие
+        retryHandler.removeCallbacksAndMessages(null)
+
 
         when (intent?.action) {
             ACTION_CONNECT -> {
                 Log.i(TAG, "Action connect received")
-                val configString = intent.getStringExtra(EXTRA_WG_CONFIG_STRING)
+                connectAttemptsInThisLifecycle++
 
+                if (goBackend == null) {
+                    Log.w(TAG, "GoBackend was null on ACTION_CONNECT. Attempting to re-initialize.")
+                    try {
+                        goBackend = GoBackend(this)
+                        Log.i(TAG, "GoBackend re-initialized in onStartCommand.")
+                    } catch (e: Exception) {
+                        Log.e(TAG, "Failed to re-initialize GoBackend in onStartCommand", e)
+                        _vpnError.postValue("VPN backend error: ${e.message}")
+                        return START_NOT_STICKY
+                    }
+                }
+
+                val configString = intent.getStringExtra(EXTRA_WG_CONFIG_STRING)
                 if (configString == null) {
-                    Log.e(TAG, "Config string is null in intent. Cannot connect.")
-                    _vpnError.postValue("Configuration data not received by service.")
-                    _tunnelStatus.postValue(Tunnel.State.DOWN)
+                    Log.e(TAG, "Config string is null in ACTION_CONNECT")
+                    _vpnError.postValue("Internal error: VPN configuration not provided.")
                     return START_NOT_STICKY
                 }
 
                 try {
-                    this.currentWgConfig = Config.parse(configString.reader().buffered())
-                    Log.i(TAG, "Successfully parsed WireGuard config string in service.")
-                    connectTunnel()
-                } catch (e: IOException) {
-                    Log.e(TAG, "Failed to parse WireGuard config string (IOException): ${e.message}", e)
-                    _vpnError.postValue("Error parsing configuration: ${e.localizedMessage}")
-                    _tunnelStatus.postValue(Tunnel.State.DOWN)
-                    return START_NOT_STICKY
+                    if (this.currentWgConfig == null || connectAttemptsInThisLifecycle == 1) {
+                        this.currentWgConfig = Config.parse(configString.reader().buffered())
+                        Log.i(TAG, "Successfully parsed WireGuard config string.")
+                    } else {
+                        Log.i(TAG, "Using previously parsed WireGuard config string for retry.")
+                    }
+                    connectTunnel(connectAttemptsInThisLifecycle == 1)
                 } catch (e: Exception) {
-                    Log.e(TAG, "Failed to parse WireGuard config string (Exception): ${e.message}", e)
-                    _vpnError.postValue("Invalid configuration format: ${e.localizedMessage}")
-                    _tunnelStatus.postValue(Tunnel.State.DOWN)
+                    Log.e(TAG, "Failed to parse WireGuard config string", e)
+                    _vpnError.postValue("Invalid VPN configuration: ${e.localizedMessage}")
+                    connectAttemptsInThisLifecycle = 0
                     return START_NOT_STICKY
                 }
             }
             ACTION_DISCONNECT -> {
                 Log.i(TAG, "Action disconnect received")
-                disconnectTunnel()
+                disconnectTunnel() // retryHandler.removeCallbacksAndMessages(null) уже вызван выше
+                connectAttemptsInThisLifecycle = 0
             }
             else -> {
-                Log.w(TAG, "Unknown or null action received: ${intent?.action}")
-                if (currentTunnel == null || _tunnelStatus.value == Tunnel.State.DOWN) {
-                    Log.d(TAG, "No active tunnel and unknown action, considering stopping service.")
-                    // stopSelfResult(startId) // Раскомментируйте, если нужно останавливать
-                }
+                Log.w(TAG, "Unknown action received: ${intent?.action}")
             }
         }
         return START_STICKY
     }
 
-    private fun connectTunnel() {
-        Log.d(TAG, "Attempting to connect tunnel...")
-        clearCurrentError()
+    private fun connectTunnel(isFirstAttemptThisGoBackend: Boolean) {
+        Log.d(TAG, "Attempting to connect tunnel... (isFirstAttemptThisGoBackend: $isFirstAttemptThisGoBackend)")
 
         if (this.currentWgConfig == null) {
-            Log.e(TAG, "WireGuard configuration is not available in service.")
-            _vpnError.postValue("Internal error: Configuration not available for connection.")
-            _tunnelStatus.postValue(Tunnel.State.DOWN)
+            Log.e(TAG, "currentWgConfig is null in connectTunnel")
+            _vpnError.postValue("Internal error: VPN configuration missing.")
+            connectAttemptsInThisLifecycle = 0
             return
         }
-
         if (goBackend == null) {
-            Log.e(TAG, "GoBackend is not initialized!")
-            _vpnError.postValue("Internal error: VPN backend not initialized.")
-            _tunnelStatus.postValue(Tunnel.State.DOWN)
-            return
+            Log.e(TAG, "goBackend is null in connectTunnel. Attempting to re-initialize from connectTunnel.")
+            try {
+                goBackend = GoBackend(this)
+                Log.i(TAG, "GoBackend re-initialized in connectTunnel.")
+            } catch (e: Exception) {
+                Log.e(TAG, "Failed to re-initialize GoBackend in connectTunnel", e)
+                _vpnError.postValue("VPN backend error: ${e.message}")
+                connectAttemptsInThisLifecycle = 0
+                return
+            }
         }
 
-        if (currentTunnel != null && _tunnelStatus.value == Tunnel.State.UP) {
-            Log.w(TAG, "An active tunnel already exists. Disconnecting it first.")
-            disconnectTunnelInternal(stopService = false) // Отключим предыдущий, но сервис не остановим
+        Log.d(TAG, "Calling startForeground for connecting state BEFORE any delays or backend calls.")
+        startForeground(NOTIFICATION_ID, createNotification("VPN Connecting..."))
+
+        if (currentTunnel != null && (_tunnelStatus.value == Tunnel.State.UP || _tunnelStatus.value == Tunnel.State.TOGGLE)) {
+            Log.w(TAG, "An active tunnel exists (${_tunnelStatus.value}). Disconnecting it first.")
+            disconnectTunnelInternal(stopService = false)
+            try {
+                Thread.sleep(300)
+            } catch (e: InterruptedException) {
+                Thread.currentThread().interrupt()
+                Log.w(TAG, "Delay after internal disconnect interrupted", e)
+            }
+        } else if (currentTunnel != null && !isFirstAttemptThisGoBackend) {
+            Log.d(TAG, "Existing non-UP tunnel on non-first attempt. Ensuring it's DOWN in backend.")
+            try {
+                goBackend?.setState(currentTunnel, Tunnel.State.DOWN, null)
+            } catch (e: Exception) {
+                Log.w(TAG, "Exception trying to set existing non-UP tunnel to DOWN", e)
+            }
         }
 
         val builder = Builder()
@@ -153,98 +191,142 @@ class MyWgVpnService : VpnService() {
                     builder.addRoute(allowedIp.address, allowedIp.mask)
                 }
             }
-            // Убедитесь, что setSession вызывается ПЕРЕД establish()
-            builder.setSession(TUNNEL_NAME_IN_SERVICE) // Имя сессии для VpnService
+            builder.setSession(TUNNEL_NAME_IN_SERVICE)
         } catch (e: Exception) {
             Log.e(TAG, "Error configuring VpnService.Builder: ${e.message}", e)
-            // Используем e.message если localizedMessage отсутствует
-            val errorMsg = e.localizedMessage ?: e.message ?: "Unknown configuration error"
-            _vpnError.postValue("Error setting up VPN network parameters: $errorMsg")
+            _vpnError.postValue("Error setting up VPN network: ${e.localizedMessage}")
             _tunnelStatus.postValue(Tunnel.State.DOWN)
+            stopForeground(STOP_FOREGROUND_REMOVE)
+            connectAttemptsInThisLifecycle = 0
             return
         }
 
         try {
-            vpnInterfaceFd?.close() // Закрываем старый, если был
+            vpnInterfaceFd?.close()
             vpnInterfaceFd = builder.establish()
 
             if (vpnInterfaceFd == null) {
-                Log.e(TAG, "VpnService.Builder.establish() returned null! Failed to setup VPN interface.")
-                // Добавим более общее сообщение, если система не дала деталей
-                _vpnError.postValue("Failed to establish VPN interface (OS denied or error, no specific message).")
+                Log.e(TAG, "VpnService.Builder.establish() returned null!")
+                _vpnError.postValue("Failed to establish VPN interface (OS error).")
                 _tunnelStatus.postValue(Tunnel.State.DOWN)
-                // Здесь может потребоваться вызвать stopSelf() или stopForeground(), если это критическая ошибка
+                stopForeground(STOP_FOREGROUND_REMOVE)
+                connectAttemptsInThisLifecycle = 0
                 return
             }
             Log.d(TAG, "VPN interface established with fd: ${vpnInterfaceFd!!.fd}")
 
-            currentTunnel = MyWgTunnel(TUNNEL_NAME_IN_SERVICE) { newState -> // Передаем актуальное имя
+            currentTunnel = MyWgTunnel(TUNNEL_NAME_IN_SERVICE) { newState ->
                 Log.d(TAG, "Tunnel state changed: ${currentTunnel?.getName()} -> $newState")
                 _tunnelStatus.postValue(newState)
                 if (newState == Tunnel.State.UP) {
+                    clearCurrentError()
+                    // Успешное соединение, сбрасываем счетчик явных попыток для этого цикла
+                    connectAttemptsInThisLifecycle = 0
                     startForeground(NOTIFICATION_ID, createNotification("VPN Connected to ${currentTunnel?.getName()}"))
                 } else if (newState == Tunnel.State.DOWN) {
                     if (vpnInterfaceFd != null) {
                         Log.d(TAG, "Tunnel is DOWN, closing VPN interface FD.")
                         closeVpnInterface()
                     }
-                    // stopForeground(STOP_FOREGROUND_REMOVE) // Подумайте, нужно ли это здесь
+                    // Не сбрасываем foreground здесь, если это не явный дисконнект
+                    // stopForeground(STOP_FOREGROUND_REMOVE) // Убрано, т.к. может быть авторетрай
                 }
             }
 
-            Log.i(TAG, "Calling goBackend.setState UP for tunnel: ${currentTunnel?.getName()} with config: ${this.currentWgConfig?.getInterface()?.getAddresses()}")
-            goBackend?.setState(currentTunnel, Tunnel.State.UP, this.currentWgConfig)
-            // Сразу после вызова setState, состояние туннеля еще не UP, оно изменится асинхронно
-            // через коллбэк в MyWgTunnel. Поэтому TOGGLE здесь уместен.
-            _tunnelStatus.postValue(Tunnel.State.TOGGLE)
+            if (isFirstAttemptThisGoBackend) {
+                Log.d(TAG, "First attempt for this GoBackend instance. Pre-setting tunnel to DOWN.")
+                try {
+                    goBackend?.setState(currentTunnel, Tunnel.State.DOWN, null)
+                    Log.d(TAG, "GoBackend 'pre-set' DOWN call completed for ${currentTunnel?.getName()}.")
+                } catch (e: Exception) {
+                    Log.e(TAG, "Error during GoBackend 'pre-set' DOWN for ${currentTunnel?.getName()}", e)
+                }
+            }
 
-            startForeground(NOTIFICATION_ID, createNotification("VPN Connecting to ${currentTunnel?.getName()}..."))
+            Log.i(TAG, "Calling goBackend.setState UP for tunnel: ${currentTunnel?.getName()}")
+            goBackend?.setState(currentTunnel, Tunnel.State.UP, this.currentWgConfig)
 
         } catch (e: Exception) {
-            Log.e(TAG, "Failed to connect tunnel or establish VPN interface: ${e.message}", e)
-            // Улучшенное сообщение об ошибке
-            val errorDetail = e.localizedMessage ?: e.message ?: e.toString()
-            _vpnError.postValue("Connection failed: $errorDetail")
-            _tunnelStatus.postValue(Tunnel.State.DOWN)
+            Log.e(TAG, "Failed to connect tunnel (isFirstAttemptThisGoBackend: $isFirstAttemptThisGoBackend): ${e.message}", e)
             closeVpnInterface()
-            stopForeground(STOP_FOREGROUND_REMOVE)
-            // stopSelf(); // Возможно, остановить сервис, если ошибка критична
+
+            if (isFirstAttemptThisGoBackend) {
+                Log.w(TAG, "First attempt with this GoBackend failed. Re-initializing GoBackend and scheduling automatic retry.")
+                currentTunnel = null // Обнуляем туннель
+                try {
+                    goBackend = GoBackend(this) // Создаем новый экземпляр
+                    Log.i(TAG, "GoBackend re-initialized. Scheduling automatic retry.")
+
+                    // << --- ИЗМЕНЕНИЕ ЗДЕСЬ --- >>
+                    retryHandler.postDelayed({
+                        Log.d(TAG, "Executing delayed automatic retry.")
+                        // Проверяем, не был ли сервис остановлен или конфиг сброшен тем временем
+                        if (_serviceIsRunning.value == true && currentWgConfig != null) {
+                            connectTunnel(isFirstAttemptThisGoBackend = false)
+                        } else {
+                            Log.w(TAG, "Retry aborted: service not running or config is null.")
+                            if (_serviceIsRunning.value == true) { // Если сервис еще работает, но конфига нет
+                                _vpnError.postValue("Internal error: VPN configuration missing for retry.")
+                                _tunnelStatus.postValue(Tunnel.State.DOWN)
+                                stopForeground(STOP_FOREGROUND_REMOVE)
+                                connectAttemptsInThisLifecycle = 0
+                            }
+                        }
+                    }, 1000) // Задержка 1 секунда, можно настроить
+
+                } catch (reinitEx: Exception) {
+                    Log.e(TAG, "Failed to re-initialize GoBackend for retry", reinitEx)
+                    _vpnError.postValue("Critical backend error during retry: ${reinitEx.message}")
+                    _tunnelStatus.postValue(Tunnel.State.DOWN)
+                    stopForeground(STOP_FOREGROUND_REMOVE)
+                    connectAttemptsInThisLifecycle = 0
+                }
+            } else {
+                // Если и вторая (автоматическая, отложенная) попытка не удалась
+                Log.e(TAG, "Automatic (delayed) retry also failed.")
+                _vpnError.postValue("Connection failed after automatic retry: ${e.localizedMessage}")
+                _tunnelStatus.postValue(Tunnel.State.DOWN)
+                stopForeground(STOP_FOREGROUND_REMOVE)
+                connectAttemptsInThisLifecycle = 0
+            }
         }
     }
 
     private fun disconnectTunnel() {
+        // Отменяем любые запланированные ретраи при дисконнекте
+        retryHandler.removeCallbacksAndMessages(null)
         disconnectTunnelInternal(stopService = true)
     }
 
     private fun disconnectTunnelInternal(stopService: Boolean) {
         Log.d(TAG, "Attempting to disconnect tunnel (stopService: $stopService)...")
-        // clearCurrentError() // Ошибка будет сброшена при следующем ACTION_CONNECT
+        // connectAttemptsInThisLifecycle = 0 // Уже сбрасывается в onStartCommand/ACTION_DISCONNECT или при успехе/полном провале
 
-        if (currentTunnel != null && goBackend != null) {
+        val tunnelToDisconnect = currentTunnel
+        if (tunnelToDisconnect != null && goBackend != null) {
             try {
-                goBackend?.setState(currentTunnel, Tunnel.State.DOWN, null)
+                Log.d(TAG, "Calling goBackend.setState DOWN for tunnel: ${tunnelToDisconnect.getName()}")
+                goBackend?.setState(tunnelToDisconnect, Tunnel.State.DOWN, null)
             } catch (e: Exception) {
                 Log.e(TAG, "Error disconnecting tunnel via GoBackend: ${e.message}", e)
-                _vpnError.postValue("Disconnection error: ${e.localizedMessage}")
-                _tunnelStatus.postValue(Tunnel.State.DOWN)
-                closeVpnInterface() // Закрываем интерфейс даже при ошибке в GoBackend
             }
         } else {
-            Log.w(TAG, "Tunnel or backend not initialized, cannot disconnect.")
-            _tunnelStatus.postValue(Tunnel.State.DOWN)
-            closeVpnInterface()
+            Log.w(TAG, "Tunnel (${tunnelToDisconnect?.getName()}) or backend not initialized, cannot send DOWN to GoBackend.")
         }
+        _tunnelStatus.postValue(Tunnel.State.DOWN)
+        closeVpnInterface()
         currentTunnel = null
 
         if (stopService) {
             stopForeground(STOP_FOREGROUND_REMOVE)
             Log.d(TAG, "Service attempting to stop itself after disconnect.")
-            stopSelf()
+            stopSelfResult(serviceStartIdForRetries)
+            Log.d(TAG, "stopSelfResult called with startId: $serviceStartIdForRetries")
         } else {
-            // Если сервис не останавливается (например, в onDestroy или при переподключении),
-            // можно обновить уведомление или убрать его, если туннель упал.
+            // Если сервис не останавливается (например, при внутреннем реконнекте или в onDestroy)
+            // И если статус уже DOWN (например, из-за ошибки, а не явного дисконнекта)
             if (_tunnelStatus.value == Tunnel.State.DOWN) {
-                stopForeground(STOP_FOREGROUND_REMOVE)
+                stopForeground(STOP_FOREGROUND_REMOVE) // Убираем уведомление "Connecting..."
             }
         }
     }
@@ -264,7 +346,7 @@ class MyWgVpnService : VpnService() {
             val serviceChannel = NotificationChannel(
                 NOTIFICATION_CHANNEL_ID,
                 "VPN Service Channel",
-                NotificationManager.IMPORTANCE_DEFAULT
+                NotificationManager.IMPORTANCE_LOW
             )
             val manager = getSystemService(NotificationManager::class.java)
             manager?.createNotificationChannel(serviceChannel)
@@ -272,7 +354,9 @@ class MyWgVpnService : VpnService() {
     }
 
     private fun createNotification(text: String): Notification {
-        val notificationIntent = Intent(this, MainActivity::class.java)
+        val notificationIntent = Intent(this, MainActivity::class.java) // Убедитесь, что MainActivity - это ваш главный экран
+        notificationIntent.flags = Intent.FLAG_ACTIVITY_SINGLE_TOP or Intent.FLAG_ACTIVITY_CLEAR_TOP
+
         val pendingIntentFlags = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
             PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT
         } else {
@@ -283,14 +367,16 @@ class MyWgVpnService : VpnService() {
         return NotificationCompat.Builder(this, NOTIFICATION_CHANNEL_ID)
             .setContentTitle("VPN for Friends")
             .setContentText(text)
-            .setSmallIcon(R.drawable.ic_launcher_foreground) // ЗАМЕНИТЕ НА СВОЮ ИКОНКУ
+            .setSmallIcon(R.drawable.ic_launcher_foreground) // Замените на вашу иконку
             .setOngoing(true)
+            .setPriority(NotificationCompat.PRIORITY_MIN)
             .setContentIntent(pendingIntent)
             .build()
     }
 
     override fun onRevoke() {
         Log.w(TAG, "VPN service revoked by system or user!")
+        retryHandler.removeCallbacksAndMessages(null) // Отменяем ретраи
         _vpnError.postValue("VPN connection revoked by system.")
         disconnectTunnelInternal(stopService = true)
         super.onRevoke()
@@ -298,13 +384,14 @@ class MyWgVpnService : VpnService() {
 
     override fun onDestroy() {
         Log.d(TAG, "onDestroy called")
+        retryHandler.removeCallbacksAndMessages(null) // Очищаем любые запланированные задачи
         _serviceIsRunning.postValue(false)
-        if (currentTunnel != null || vpnInterfaceFd != null) {
-            Log.w(TAG, "Service destroyed, but tunnel or VPN interface might still be active. Forcing disconnect.")
-            disconnectTunnelInternal(stopService = false)
-        }
-        goBackend = null
+        closeVpnInterface()
+        currentTunnel = null
+        // goBackend здесь не нужно обнулять, он сам очистится.
+        // Главное, чтобы не было ссылок на него в отложенных задачах.
         super.onDestroy()
+        Log.d(TAG, "onDestroy completed.")
     }
 
     override fun onBind(intent: Intent?): android.os.IBinder? = null
