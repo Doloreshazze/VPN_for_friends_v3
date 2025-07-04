@@ -58,12 +58,13 @@ class VpnViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun createAndPrepareConfig() {
-        val clientPrivateKeyString = "qMUVBNevBEcl1U8fAdOOT5K6QKRy+2XXGNGEKnC2Blk="
+        val clientPrivateKeyString = "yBEoBcecxi0aM0pAaoW6wzXZDvhsTtDpeB/k2kSsf0o="
         val clientAddressString = "10.0.1.2/32"
         val dnsServerString = "1.1.1.1"
-        val serverPublicKeyString = "k6eSEKXjyj+awlgCqLX2q8e8Y9YZox8nzYHh31p5THs="
-        val serverEndpointString = "192.168.50.206:51820"
+        val serverPublicKeyString = "GkIxytsc2pBgEl9n7s3rGmaTxGxNB+5bO00rwasgUDY="
+        val serverEndpointString = "144.91.74.177:51820"
         val allowedIpsString = "0.0.0.0/0"
+
 
         /*if (clientPrivateKeyString == "qMUVBNevBEcl1U8fAdOOT5K6QKRy+2XXGNGEKnC2Blk=" ||
             serverPublicKeyString == "k6eSEKXjyj+awlgCqLX2q8e8Y9YZox8nzYHh31p5THs=" ||
@@ -90,11 +91,13 @@ class VpnViewModel(application: Application) : AndroidViewModel(application) {
                 .addAddress(clientAddress)
                 .addDnsServer(dnsServer)
                 .setKeyPair(clientKeyPair)
+                .setMtu(1420)
 
             val peerBuilder = Peer.Builder()
                 .setPublicKey(serverPublicKey)
                 .addAllowedIp(allowedIps)
                 .setEndpoint(serverEndpoint)
+                .setPersistentKeepalive(25)
 
             val config = Config.Builder()
                 .setInterface(interfaceBuilder.build())
