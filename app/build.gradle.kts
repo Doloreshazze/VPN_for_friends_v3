@@ -6,12 +6,12 @@ plugins {
 
 android {
     namespace = "com.playeverywhere999.vpn_for_friends_v3"
-    compileSdk = 34
+    compileSdk = 35
 
     defaultConfig {
         applicationId = "com.playeverywhere999.vpn_for_friends_v3"
         minSdk = 24
-        targetSdk = 34
+        targetSdk = 35
         versionCode = 1
         versionName = "1.0"
 

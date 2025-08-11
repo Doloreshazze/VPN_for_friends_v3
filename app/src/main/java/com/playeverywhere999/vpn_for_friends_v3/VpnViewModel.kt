@@ -58,24 +58,18 @@ class VpnViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun createAndPrepareConfig() {
-        val clientPrivateKeyString = "yBEoBcecxi0aM0pAaoW6wzXZDvhsTtDpeB/k2kSsf0o="
-        val clientAddressString = "10.0.1.2/32"
-        val dnsServerString = "1.1.1.1"
-        val serverPublicKeyString = "GkIxytsc2pBgEl9n7s3rGmaTxGxNB+5bO00rwasgUDY="
-        val serverEndpointString = "144.91.74.177:51820"
-        val allowedIpsString = "0.0.0.0/0"
+        // [Interface]
+        val clientPrivateKeyString = "uDVWKj5nPZFLqZS0I3/R58LZnJBfCGsVvo2Ds4BD8XE=" // ИЗМЕНЕНО
+        val clientAddressString = "10.8.0.2/32" // ИЗМЕНЕНО
+        val dnsServersList = listOf("1.1.1.1", "1.0.0.1") // ИЗМЕНЕНО для нескольких DNS
+        val interfaceMtu = 1380 // ИЗМЕНЕНО
 
+        // [Peer]
+        val serverPublicKeyString = "GkIxytsc2pBgEl9n7s3rGmaTxGxNB+5bO00rwasgUDY=" // ПРОВЕРЕНО
+        val serverEndpointString = "144.91.74.177:51820" // ПРОВЕРЕНО (рекомендуется домен)
+        val allowedIpsList = listOf("0.0.0.0/0", "::/0") // ИЗМЕНЕНО для IPv4 и IPv6
+        val peerPersistentKeepalive = 25 // ПРОВЕРЕНО
 
-        /*if (clientPrivateKeyString == "qMUVBNevBEcl1U8fAdOOT5K6QKRy+2XXGNGEKnC2Blk=" ||
-            serverPublicKeyString == "k6eSEKXjyj+awlgCqLX2q8e8Y9YZox8nzYHh31p5THs=" ||
-            serverEndpointString == "10.0.1.2/32" // Пример неверного значения для проверки
-        ) {
-            Log.e(TAG, "Placeholder keys/endpoint found. Please replace them in VpnViewModel.")
-            _lastErrorMessage.postValue("Error: Default keys or server address not replaced.")
-            _preparedConfig.postValue(null)
-            // resetConfigAndTunnel() // Этот метод тоже изменится
-            return
-        }*/
 
         try {
             val clientPrivateKey = Key.fromBase64(clientPrivateKeyString)
@@ -83,21 +77,24 @@ class VpnViewModel(application: Application) : AndroidViewModel(application) {
             val clientKeyPair = KeyPair(clientPrivateKey)
             Log.d("VpnViewModel", "Client Public Key: ${clientKeyPair.publicKey.toBase64()}")
             val clientAddress = InetNetwork.parse(clientAddressString)
-            val dnsServer = InetAddress.getByName(dnsServerString)
-            val allowedIps = InetNetwork.parse(allowedIpsString)
-            val serverEndpoint = InetEndpoint.parse(serverEndpointString)
 
             val interfaceBuilder = Interface.Builder()
                 .addAddress(clientAddress)
-                .addDnsServer(dnsServer)
+            dnsServersList.forEach { dnsStr ->
+                interfaceBuilder.addDnsServer(InetAddress.getByName(dnsStr))
+            }
+            interfaceBuilder
                 .setKeyPair(clientKeyPair)
-                .setMtu(1420)
+                .setMtu(interfaceMtu) // Используем переменную
 
             val peerBuilder = Peer.Builder()
                 .setPublicKey(serverPublicKey)
-                .addAllowedIp(allowedIps)
-                .setEndpoint(serverEndpoint)
-                .setPersistentKeepalive(25)
+            allowedIpsList.forEach { ipStr ->
+                peerBuilder.addAllowedIp(InetNetwork.parse(ipStr))
+            }
+            peerBuilder
+                .setEndpoint(InetEndpoint.parse(serverEndpointString)) // Парсим здесь
+                .setPersistentKeepalive(peerPersistentKeepalive) // Используем переменную
 
             val config = Config.Builder()
                 .setInterface(interfaceBuilder.build())
@@ -105,10 +102,10 @@ class VpnViewModel(application: Application) : AndroidViewModel(application) {
                 .build()
             Log.d("VpnViewModel", "Config is created")
 
-            currentWireGuardConfigForPreparation = config // Сохраняем для возможного использования
-            _preparedConfig.postValue(config) // Публикуем готовую конфигурацию
+            currentWireGuardConfigForPreparation = config
+            _preparedConfig.postValue(config)
             Log.d(TAG, "WireGuard config created and posted successfully.")
-            _lastErrorMessage.postValue(null) // Сбрасываем ошибку, если была
+            _lastErrorMessage.postValue(null)
 
         } catch (e: KeyFormatException) {
             Log.e(TAG, "Error creating WireGuard config: Invalid key format", e)
@@ -128,6 +125,7 @@ class VpnViewModel(application: Application) : AndroidViewModel(application) {
             _preparedConfig.postValue(null)
         }
     }
+
 
     fun clearLastError() {
         _lastErrorMessage.postValue(null) // или .value = null, если вы уверены, что вызывается из главного потока
