@@ -16,6 +16,9 @@ android {
         versionName = "1.0"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
+
+        // Base URL for server API (override via build flavors if needed)
+        buildConfigField("String", "SERVER_BASE_URL", "\"https://example.com\"")
     }
 
     buildTypes {
@@ -45,6 +48,7 @@ android {
     }
     buildFeatures {
         compose = true
+        buildConfig = true
     }
 }
 
@@ -80,6 +84,10 @@ dependencies {
 
     // Зависимость для Core Library Desugaring
     coreLibraryDesugaring(libs.android.desugarJdkLibs)
+
+    // Networking for server token exchange
+    implementation("com.squareup.okhttp3:okhttp:4.12.0")
+    implementation("com.squareup.okhttp3:logging-interceptor:4.12.0")
 
     // Тестовые зависимости
     testImplementation(libs.junit) // JUnit для юнит-тестов
