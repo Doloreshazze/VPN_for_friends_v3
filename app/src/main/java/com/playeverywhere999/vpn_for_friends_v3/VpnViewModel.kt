@@ -33,6 +33,15 @@ class VpnViewModel(application: Application) : AndroidViewModel(application) {
     private val _preparedConfig = MutableLiveData<Config?>()
     val preparedConfig: LiveData<Config?> = _preparedConfig
 
+    // Token to request config from server
+    private val _token = MutableLiveData<String>("")
+    val token: LiveData<String> = _token
+
+    // Loading indicator for config fetch
+    private val _isFetchingConfig = MutableLiveData<Boolean>(false)
+    val isFetchingConfig: LiveData<Boolean> = _isFetchingConfig
+
+    private val repository: ServerRepository = ServerRepository(BuildConfig.SERVER_BASE_URL)
 
     private var backend: GoBackend? = null // GoBackend теперь может инициализироваться и использоваться в сервисе
     // currentTunnel и currentWireGuardConfig теперь в основном для createAndPrepareConfig
@@ -57,18 +66,22 @@ class VpnViewModel(application: Application) : AndroidViewModel(application) {
         // Log.d(TAG, "GoBackend potentially initialized in ViewModel.")
     }
 
+    fun setToken(newToken: String) {
+        _token.postValue(newToken)
+    }
+
     fun createAndPrepareConfig() {
         // [Interface]
-        val clientPrivateKeyString = "uDVWKj5nPZFLqZS0I3/R58LZnJBfCGsVvo2Ds4BD8XE=" // ИЗМЕНЕНО
-        val clientAddressString = "10.8.0.2/32" // ИЗМЕНЕНО
-        val dnsServersList = listOf("1.1.1.1", "1.0.0.1") // ИЗМЕНЕНО для нескольких DNS
-        val interfaceMtu = 1380 // ИЗМЕНЕНО
+        val clientPrivateKeyString = "uDVWKj5nPZFLqZS0I3/R58LZnJBfCGsVvo2Ds4BD8XE=" // Sample only; prefer server
+        val clientAddressString = "10.8.0.2/32"
+        val dnsServersList = listOf("1.1.1.1", "1.0.0.1")
+        val interfaceMtu = 1380
 
         // [Peer]
-        val serverPublicKeyString = "GkIxytsc2pBgEl9n7s3rGmaTxGxNB+5bO00rwasgUDY=" // ПРОВЕРЕНО
-        val serverEndpointString = "144.91.74.177:51820" // ПРОВЕРЕНО (рекомендуется домен)
-        val allowedIpsList = listOf("0.0.0.0/0", "::/0") // ИЗМЕНЕНО для IPv4 и IPv6
-        val peerPersistentKeepalive = 25 // ПРОВЕРЕНО
+        val serverPublicKeyString = "GkIxytsc2pBgEl9n7s3rGmaTxGxNB+5bO00rwasgUDY"
+        val serverEndpointString = "144.91.74.177:51820"
+        val allowedIpsList = listOf("0.0.0.0/0", "::/0")
+        val peerPersistentKeepalive = 25
 
 
         try {
@@ -124,6 +137,31 @@ class VpnViewModel(application: Application) : AndroidViewModel(application) {
             _lastErrorMessage.postValue("Error creating config: ${e.message}")
             _preparedConfig.postValue(null)
         }
+    }
+
+    fun fetchConfigByTokenAndPrepare(onSuccess: (() -> Unit)? = null) {
+        val currentToken = _token.value?.trim().orEmpty()
+        if (currentToken.isEmpty()) {
+            _lastErrorMessage.postValue("Token is empty")
+            return
+        }
+        _isFetchingConfig.postValue(true)
+        Thread {
+            try {
+                val configString = repository.fetchWireGuardConfigByToken(currentToken)
+                val cfg = Config.parse(configString.reader().buffered())
+                currentWireGuardConfigForPreparation = cfg
+                _preparedConfig.postValue(cfg)
+                _lastErrorMessage.postValue(null)
+                onSuccess?.invoke()
+            } catch (e: Exception) {
+                Log.e(TAG, "Failed to fetch/parse config by token", e)
+                _preparedConfig.postValue(null)
+                _lastErrorMessage.postValue("Failed to fetch config: ${'$'}{e.message}")
+            } finally {
+                _isFetchingConfig.postValue(false)
+            }
+        }.start()
     }
 
 

@@ -20,6 +20,8 @@ import androidx.compose.runtime.*
 import androidx.compose.runtime.livedata.observeAsState
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.text.input.KeyboardType
+import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
 import androidx.core.content.ContextCompat
@@ -118,11 +120,15 @@ class MainActivity : ComponentActivity() {
                 VpnControlScreen(
                     displayState = currentDisplayState,
                     errorMessage = lastErrorMessageFromViewModel,
+                    token = vpnViewModel.token.observeAsState("").value ?: "",
+                    isFetching = vpnViewModel.isFetchingConfig.observeAsState(false).value ?: false,
+                    onTokenChange = { vpnViewModel.setToken(it) },
                     onConnectClick = {
                         initiateVpnConnectionOrToggle()
                     },
                     onPrepareConfigClick = {
                         Log.d("MainActivity", "Prepare config button clicked.")
+                        // Deprecated: local static config. Prefer server token flow.
                         vpnViewModel.createAndPrepareConfig()
                         val currentConfig = vpnViewModel.preparedConfig.value
                         if (currentConfig != null) {
@@ -157,22 +163,29 @@ class MainActivity : ComponentActivity() {
             //     vpnViewModel.clearLastError() // Или пусть ViewModel сама решает, когда очищать ошибку
             // }
 
+            // Ensure we have config; if not, fetch by token first
             val preparedConfigObject: Config? = vpnViewModel.preparedConfig.value
             if (preparedConfigObject == null) {
-                Log.e("MainActivity", "Configuration not prepared. Please load configuration first.")
-                Toast.makeText(this, "Configuration not loaded. Please Load/Reload first.", Toast.LENGTH_LONG).show()
-                vpnViewModel.setExternalVpnState(Tunnel.State.DOWN, "Configuration not loaded. Please Load/Reload first.")
+                val tokenValue = vpnViewModel.token.value?.trim().orEmpty()
+                if (tokenValue.isEmpty()) {
+                    Toast.makeText(this, "Enter token or Load config first.", Toast.LENGTH_LONG).show()
+                    vpnViewModel.setExternalVpnState(Tunnel.State.DOWN, "Token required or config must be loaded.")
+                    return
+                }
+                vpnViewModel.fetchConfigByTokenAndPrepare(onSuccess = {
+                    runOnUiThread {
+                        val cfgAfterFetch = vpnViewModel.preparedConfig.value
+                        if (cfgAfterFetch != null) {
+                            proceedToPermissionsAndConnect()
+                        } else {
+                            Toast.makeText(this, "Failed to prepare configuration.", Toast.LENGTH_LONG).show()
+                        }
+                    }
+                })
                 return
             }
 
-            val vpnIntentPermission = VpnService.prepare(this)
-            if (vpnIntentPermission != null) {
-                Log.d("MainActivity", "Requesting VPN permission.")
-                requestVpnPermissionLauncher.launch(vpnIntentPermission)
-            } else {
-                Log.d("MainActivity", "VPN permission already granted.")
-                checkAndRequestPostNotificationPermissionThenConnect()
-            }
+            proceedToPermissionsAndConnect()
         } else {
             Log.d("MainActivity", "Intent to DISCONNECT. Effective decision state: $effectiveStateForDecision")
             Intent(this, MyWgVpnService::class.java).also {
@@ -180,6 +193,17 @@ class MainActivity : ComponentActivity() {
                 startService(it) // Используйте startService, а не startForegroundService для ACTION_DISCONNECT
             }
             vpnViewModel.setIntermediateVpnState(Tunnel.State.TOGGLE)
+        }
+    }
+
+    private fun proceedToPermissionsAndConnect() {
+        val vpnIntentPermission = VpnService.prepare(this)
+        if (vpnIntentPermission != null) {
+            Log.d("MainActivity", "Requesting VPN permission.")
+            requestVpnPermissionLauncher.launch(vpnIntentPermission)
+        } else {
+            Log.d("MainActivity", "VPN permission already granted.")
+            checkAndRequestPostNotificationPermissionThenConnect()
         }
     }
 
@@ -286,6 +310,9 @@ class MainActivity : ComponentActivity() {
 fun VpnControlScreen(
     displayState: VpnDisplayState,
     errorMessage: String?,
+    token: String,
+    isFetching: Boolean,
+    onTokenChange: (String) -> Unit,
     onConnectClick: () -> Unit,
     onPrepareConfigClick: () -> Unit
 ) {
@@ -312,6 +339,15 @@ fun VpnControlScreen(
                 Spacer(modifier = Modifier.height(12.dp))
             }
 
+            OutlinedTextField(
+                value = token,
+                onValueChange = onTokenChange,
+                label = { Text("Token") },
+                singleLine = true,
+                modifier = Modifier.fillMaxWidth()
+            )
+            Spacer(modifier = Modifier.height(12.dp))
+
             Button(onClick = onPrepareConfigClick) {
                 Text("Load/Reload Configuration")
             }
@@ -319,14 +355,14 @@ fun VpnControlScreen(
 
             Button(
                 onClick = onConnectClick,
-                enabled = displayState != VpnDisplayState.CONNECTING && displayState != VpnDisplayState.DISCONNECTING
+                enabled = displayState != VpnDisplayState.CONNECTING && displayState != VpnDisplayState.DISCONNECTING && !isFetching
             ) {
                 val buttonText = when (displayState) {
                     VpnDisplayState.IDLE -> "Connect"
                     VpnDisplayState.CONNECTING -> "Connecting..."
                     VpnDisplayState.CONNECTED -> "Disconnect"
                     VpnDisplayState.DISCONNECTING -> "Disconnecting..."
-                    VpnDisplayState.ERROR -> "Retry Connect"
+                    VpnDisplayState.ERROR -> if (isFetching) "Fetching..." else "Retry Connect"
                 }
                 Text(buttonText)
             }
@@ -341,6 +377,9 @@ fun DefaultPreviewMainActivityIdle() {
         VpnControlScreen(
             displayState = VpnDisplayState.IDLE,
             errorMessage = null,
+            token = "",
+            isFetching = false,
+            onTokenChange = {},
             onConnectClick = {},
             onPrepareConfigClick = {}
         )
@@ -354,6 +393,9 @@ fun DefaultPreviewMainActivityConnected() {
         VpnControlScreen(
             displayState = VpnDisplayState.CONNECTED,
             errorMessage = null,
+            token = "abc123",
+            isFetching = false,
+            onTokenChange = {},
             onConnectClick = {},
             onPrepareConfigClick = {}
         )
@@ -367,6 +409,9 @@ fun DefaultPreviewMainActivityError() {
         VpnControlScreen(
             displayState = VpnDisplayState.ERROR,
             errorMessage = "Sample error: Connection timed out.",
+            token = "bad",
+            isFetching = false,
+            onTokenChange = {},
             onConnectClick = {},
             onPrepareConfigClick = {}
         )
