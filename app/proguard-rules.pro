@@ -19,3 +19,15 @@
 # If you keep the line number information, uncomment this to
 # hide the original source file name.
 #-renamesourcefileattribute SourceFile
+
+# Правила для Ktor
+-keep class io.ktor.** { *; }
+-dontwarn io.ktor.**
+
+# Правила для Kotlinx Serialization
+-keep class kotlinx.serialization.** { *; }
+-dontwarn kotlinx.serialization.**
+
+# Правила для WireGuard
+-keep class com.wireguard.** { *; }
+-dontwarn com.wireguard.**

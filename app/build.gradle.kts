@@ -1,7 +1,8 @@
 plugins {
     alias(libs.plugins.android.application)
     alias(libs.plugins.kotlin.android)
-    alias(libs.plugins.kotlin.compose) // Плагин для поддержки Jetpack Compose
+    alias(libs.plugins.kotlin.compose)
+    id("org.jetbrains.kotlin.plugin.serialization") version "2.2.10" // Обновлено до последней версии
 }
 
 android {
@@ -20,12 +21,11 @@ android {
 
     buildTypes {
         debug {
-            isMinifyEnabled = false // Отключено для отладочных сборок
-            isShrinkResources = false // Отключено для отладочных сборок
+            isMinifyEnabled = false
+            isShrinkResources = false
         }
-
         release {
-            isMinifyEnabled = true // Рекомендуется установить в true для релизных сборок
+            isMinifyEnabled = true
             proguardFiles(
                 getDefaultProguardFile("proguard-android-optimize.txt"),
                 "proguard-rules.pro"
@@ -36,59 +36,50 @@ android {
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_17
         targetCompatibility = JavaVersion.VERSION_17
-        // Включение Core Library Desugaring для поддержки новых API Java на старых версиях Android
         isCoreLibraryDesugaringEnabled = true
     }
 
     kotlinOptions {
         jvmTarget = "17"
     }
+
     buildFeatures {
         compose = true
     }
 }
 
 dependencies {
+    val ktorVersion = "3.2.3" // Последняя стабильная версия
+    implementation("io.ktor:ktor-client-android:$ktorVersion")
+    implementation("io.ktor:ktor-client-core:$ktorVersion")
+    implementation("io.ktor:ktor-client-content-negotiation:$ktorVersion")
+    implementation("io.ktor:ktor-serialization-kotlinx-json:$ktorVersion")
+    implementation("org.jetbrains.kotlinx:kotlinx-serialization-json:1.9.0") // Последняя версия
+    implementation("io.ktor:ktor-client-logging:$ktorVersion")
+    implementation("androidx.compose.runtime:runtime-livedata:1.7.4") // Обновлено
 
-    implementation("androidx.compose.runtime:runtime-livedata:1.6.8")
     implementation("com.wireguard.android:tunnel:1.0.20230706")
-    implementation(libs.androidx.lifecycle.viewmodel.ktx) // ViewModel Kotlin Extensions
-    implementation(libs.androidx.lifecycle.viewmodel.compose) // Для интеграции ViewModel с Compose
 
-
-    // Core Kotlin Extensions - расширения Kotlin для Android Framework
+    implementation(libs.androidx.lifecycle.viewmodel.ktx)
+    implementation(libs.androidx.lifecycle.viewmodel.compose)
     implementation(libs.androidx.core.ktx)
-
-    // Lifecycle - компоненты жизненного цикла (ViewModel, LiveData, LifecycleScope)
     implementation(libs.androidx.lifecycle.runtime.ktx)
-    implementation(libs.androidx.lifecycle.livedata.ktx)   // Для использования LiveData
-
-    // Coroutines - для асинхронного программирования
+    implementation(libs.androidx.lifecycle.livedata.ktx)
     implementation(libs.kotlinx.coroutines.android)
-
-    // Jetpack Compose - основной UI toolkit
-    implementation(platform(libs.androidx.compose.bom)) // Bill of Materials для управления версиями Compose
-    implementation(libs.androidx.ui) // Базовые компоненты UI
-    implementation(libs.androidx.ui.graphics) // Графические примитивы
-    implementation(libs.androidx.ui.tooling.preview) // Для предварительного просмотра в Android Studio
-    implementation(libs.androidx.material3) // Компоненты Material Design 3
-    implementation(libs.androidx.activity.compose) // Для интеграции Compose с Activity
-
-    // WireGuard - библиотека для работы с протоколом WireGuard
-    //implementation(libs.wireguard.android.zaneschepke)
+    implementation(platform(libs.androidx.compose.bom))
+    implementation(libs.androidx.ui)
+    implementation(libs.androidx.ui.graphics)
+    implementation(libs.androidx.ui.tooling.preview)
+    implementation(libs.androidx.material3)
+    implementation(libs.androidx.activity.compose)
     implementation(libs.androidx.appcompat)
-
-    // Зависимость для Core Library Desugaring
     coreLibraryDesugaring(libs.android.desugarJdkLibs)
 
-    // Тестовые зависимости
-    testImplementation(libs.junit) // JUnit для юнит-тестов
-    androidTestImplementation(libs.androidx.junit) // JUnit для инструментальных тестов
-    androidTestImplementation(libs.androidx.espresso.core) // Espresso для UI-тестов
-    androidTestImplementation(platform(libs.androidx.compose.bom)) // BOM для тестовых Compose зависимостей
-    androidTestImplementation(libs.androidx.ui.test.junit4) // Тестирование Compose UI
-
-    // Отладочные зависимости
-    debugImplementation(libs.androidx.ui.tooling) // Инструменты для отладки Compose
-    debugImplementation(libs.androidx.ui.test.manifest) // Манифест для тестовых Compose UI
+    testImplementation(libs.junit)
+    androidTestImplementation(libs.androidx.junit)
+    androidTestImplementation(libs.androidx.espresso.core)
+    androidTestImplementation(platform(libs.androidx.compose.bom))
+    androidTestImplementation(libs.androidx.ui.test.junit4)
+    debugImplementation(libs.androidx.ui.tooling)
+    debugImplementation(libs.androidx.ui.test.manifest)
 }
