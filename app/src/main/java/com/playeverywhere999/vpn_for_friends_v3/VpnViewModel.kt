@@ -27,6 +27,7 @@ import io.ktor.client.engine.android.Android
 import io.ktor.client.plugins.ClientRequestException
 import io.ktor.client.plugins.ServerResponseException
 import io.ktor.client.plugins.contentnegotiation.ContentNegotiation
+import io.ktor.client.plugins.logging.LogLevel
 import io.ktor.client.plugins.logging.ANDROID as KtorLogger // Псевдоним во избежание конфликтов, если есть другой Logger
 import io.ktor.client.plugins.logging.LogLevel as KtorLogLevel // Псевдоним
 import io.ktor.client.plugins.logging.Logging
@@ -211,125 +212,33 @@ class VpnViewModel(application: Application) : AndroidViewModel(application) {
 
 
     private suspend fun fetchConfigFromRealApi(clientPublicKeyForServer: String): ServerConfigData? {
-        val client = HttpClient(Android) {
-            install(ContentNegotiation) {
-                json(Json {
-                    prettyPrint = true
-                    isLenient = true
-                    ignoreUnknownKeys = true // Оставим true на время тестирования
-                })
-            }
-            // Добавляем Logging для отладки Ktor запросов
-            install(Logging) {
-                logger = object : io.ktor.client.plugins.logging.Logger {
-                    override fun log(message: String) {
-                        android.util.Log.d("ktor_client", message)
-                    }
-                }
-                level = io.ktor.client.plugins.logging.LogLevel.ALL   // Явно указываем полный путь к Ktor LogLevel
-            }
-            engine {
-                connectTimeout = 10_000 // 10 секунд
-                socketTimeout = 10_000  // 10 секунд
-            }
-        }
-
-        // ЗАМЕНИТЕ ЭТОТ URL НА ВАШ URL, СГЕНЕРИРОВАННЫЙ MOCKY ИЛИ ДРУГИМ МОК-СЕРВИСОМ
-        var apiUrl = "ВАШ_MOCKY_URL_ИЛИ_ДРУГОЙ_МОК_URL_СЮДА"
-        // Пример: apiUrl = "https://run.mocky.io/v3/your-generated-id"
-
-        if (apiUrl == "ВАШ_MOCKY_URL_ИЛИ_ДРУГОЙ_МОК_URL_СЮДА") {
-            Log.e(TAG, "fetchConfigFromRealApi: API URL is not set. Please replace placeholder with your mock URL.")
-            _lastErrorMessage.postValue("Internal Error: API URL not configured for testing.")
-            _configStatusMessage.postValue("Error: API URL not set.")
-            return null
-        }
-
-        Log.d(TAG, "Attempting to fetch config from: $apiUrl with public key: $clientPublicKeyForServer")
-        _configStatusMessage.postValue("Contacting server for config...")
-
-        // --- НАЧАЛО ЗАГЛУШКИ ДЛЯ ТЕСТИРОВАНИЯ БЕЗ РЕАЛЬНОГО БЭКЕНДА --- (ТЕПЕРЬ ЗАКОММЕНТИРОВАНО)
-        /*
-        Log.d(TAG, "USING MOCK SERVER RESPONSE FOR TESTING!")
-        delay(1500) // Имитация задержки сети
-        // Успешный мок-ответ:
-        return ServerConfigData(
-            clientAssignedAddress = "10.100.0.2/32", // Пример
-            serverPublicKey = "SERVER_PUBLIC_KEY_REPLACE_ME", // ЗАМЕНИТЕ НА РЕАЛЬНЫЙ ПУБЛИЧНЫЙ КЛЮЧ ВАШЕГО СЕРВЕРA WG
-            serverEndpoint = "123.123.123.123:51820",      // ЗАМЕНИТЕ НА РЕАЛЬНЫЙ IP:PORT ВАШЕГО СЕРВЕРА WG
-            dnsServers = listOf("1.1.1.1", "8.8.8.8"),
-            allowedIps = listOf("0.0.0.0/0", "::/0"),
-            persistentKeepalive = 25
-        )
-        // Мок-ответ с ошибкой сервера:
-        // _lastErrorMessage.postValue("Mock Error: Server unavailable (503)")
-        // _configStatusMessage.postValue("Error: Mock Server unavailable.")
-        // return null
-        */
-        // --- КОНЕЦ ЗАГЛУШКИ ДЛЯ ТЕСТИРОВАНИЯ ---
-
-
-        // --- НАЧАЛО РЕАЛЬНОГО KTOR ЗАПРОСА (ТЕПЕРЬ РАСКОММЕНТИРОВАНО) ---
         return try {
-            val response: ServerConfigData = client.post(apiUrl) {
-                contentType(io.ktor.http.ContentType.Application.Json) // Явно указываем полный путь к Ktor ContentType
-                headers {
-                    // Если ваш мок-сервер не требует токен, эту строку можно оставить закомментированной
-                    // или удалить. Для реального API, вероятно, понадобится.
-                    // append("Authorization", "Bearer $API_SECRET_TOKEN")
+            val client = HttpClient {
+                install(ContentNegotiation) {
+                    json(Json { ignoreUnknownKeys = true })
                 }
-                setBody(mapOf("client_public_key" to clientPublicKeyForServer))
+                install(Logging) {
+                    level = LogLevel.ALL
+                }
+            }
+
+            val response: ServerConfigData = client.post("https://vpnforfriends.com/api/config") {
+                contentType(ContentType.Application.Json)
+                setBody(
+                    mapOf(
+                        "username" to "test",  // Тестовый логин
+                        "password" to "test",  // Тестовый пароль
+                        "client_public_key" to clientPublicKeyForServer
+                    )
+                )
             }.body()
 
-            Log.d(TAG, "Successfully fetched and parsed config from API: $response")
-            _configStatusMessage.postValue("Configuration received from server.") // Обновляем статус
+            client.close()
             response
         } catch (e: Exception) {
             Log.e(TAG, "Error fetching or parsing config from API", e)
-            when (e) {
-                is ClientRequestException -> {
-                    val errorBody = try { e.response.bodyAsText() } catch (ex: Exception) { "No error body" }
-                    Log.e(TAG, "API Client Error: ${e.response.status} - ${e.message}. Body: $errorBody")
-                    if (e.response.status.value == 401) {
-                        _lastErrorMessage.postValue("API Error: Authorization Failed (401).")
-                        _configStatusMessage.postValue("Error: Authorization Failed.")
-                    } else {
-                        _lastErrorMessage.postValue("API Error: ${e.response.status.description} (${e.response.status.value}). Details: $errorBody")
-                        _configStatusMessage.postValue("Error: Server responded ${e.response.status.value}.")
-                    }
-                }
-                is ServerResponseException -> {
-                    val errorBody = try { e.response.bodyAsText() } catch (ex: Exception) { "No error body" }
-                    Log.e(TAG, "API Server Error: ${e.response.status} - ${e.message}. Body: $errorBody")
-                    _lastErrorMessage.postValue("API Server Error: ${e.response.status.description} (${e.response.status.value}). Details: $errorBody")
-                    _configStatusMessage.postValue("Error: Server error ${e.response.status.value}.")
-                }
-                is SerializationException -> {
-                    Log.e(TAG, "API Response JSON parsing error", e)
-                    _lastErrorMessage.postValue("API Error: Could not parse server response. ${e.localizedMessage}")
-                    _configStatusMessage.postValue("Error: Invalid server response format.")
-                }
-                is java.net.UnknownHostException -> {
-                    Log.e(TAG, "API Error: Unknown Host", e)
-                    _lastErrorMessage.postValue("API Error: Unable to resolve host ($apiUrl).")
-                    _configStatusMessage.postValue("Error: Unknown host.")
-                }
-                is java.net.ConnectException, is io.ktor.client.network.sockets.ConnectTimeoutException -> {
-                    Log.e(TAG, "API Error: Connection Failed/Timeout to $apiUrl", e)
-                    _lastErrorMessage.postValue("API Error: Could not connect to server.")
-                    _configStatusMessage.postValue("Error: Connection failed/timeout.")
-                }
-                else -> {
-                    Log.e(TAG, "API Error: Unexpected error", e)
-                    _lastErrorMessage.postValue("API Error: ${e.message ?: "Unexpected error"}")
-                    _configStatusMessage.postValue("Error: Failed to get server config.")
-                }
-            }
             null
-        } finally {
-            client.close()
         }
-        // --- КОНЕЦ РЕАЛЬНОГО KTOR ЗАПРОСА ---
     }
     private fun buildClientConfig(
         clientKeys: KeyPair,
@@ -339,25 +248,46 @@ class VpnViewModel(application: Application) : AndroidViewModel(application) {
             .setKeyPair(clientKeys)
             .addAddress(InetNetwork.parse(serverData.clientAssignedAddress))
 
-        serverData.dnsServers.forEach { dnsString -> // dnsString это, например, "1.1.1.1"
+        // Добавляем DNS-сервера
+        serverData.dnsServers.forEach { dnsString ->
             try {
-                val dnsInetAddress: InetAddress = InetAddress.getByName(dnsString.trim()) // Получаем объект InetAddress
-                interfaceBuilder.addDnsServer(dnsInetAddress) // <--- ИСПРАВЛЕНО: передаем объект InetAddress
-            } catch (e: java.net.UnknownHostException) { // Лучше ловить более конкретное исключение
+                val dnsInetAddress: InetAddress = InetAddress.getByName(dnsString.trim())
+                interfaceBuilder.addDnsServer(dnsInetAddress)
+            } catch (e: java.net.UnknownHostException) {
                 Log.w(TAG, "Invalid or unknown DNS server host: $dnsString", e)
-            } catch (e: Exception) { // Общий обработчик для других возможных проблем
+            } catch (e: Exception) {
                 Log.w(TAG, "Error processing DNS server: $dnsString", e)
             }
         }
 
+        // Фильтруем allowedIps, оставляем только IPv4
+        val filteredAllowedIps = serverData.allowedIps.filter { ip ->
+            ip.contains(".") // IPv4 всегда содержит точки, IPv6 — двоеточия
+        }
+
         val peerBuilder = Peer.Builder()
-        // ... (остальная часть вашего кода) ...
+            .setPublicKey(Key.fromBase64(serverData.serverPublicKey))
+            .setEndpoint(InetEndpoint.parse(serverData.serverEndpoint))
+            .also { builder ->
+                filteredAllowedIps.forEach { allowedIp ->
+                    try {
+                        builder.addAllowedIp(InetNetwork.parse(allowedIp))
+                    } catch (e: Exception) {
+                        Log.w(TAG, "Skipping invalid allowed IP: $allowedIp", e)
+                    }
+                }
+            }
+
+        serverData.persistentKeepalive?.let {
+            peerBuilder.setPersistentKeepalive(it)
+        }
 
         return Config.Builder()
             .setInterface(interfaceBuilder.build())
             .addPeer(peerBuilder.build())
             .build()
     }
+
 
     private fun startVpnWithCurrentConfig() {
         val currentConfig = preparedConfig.value
