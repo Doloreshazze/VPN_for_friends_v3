@@ -1,3 +1,13 @@
+import java.util.Properties
+import java.io.FileInputStream
+
+// Загрузка properties из local.properties
+val localProperties = Properties()
+val localPropertiesFile = rootProject.file("local.properties") // rootProject используется для доступа к файлу в корне проекта
+if (localPropertiesFile.exists()) {
+    localProperties.load(FileInputStream(localPropertiesFile))
+}
+
 plugins {
     alias(libs.plugins.android.application)
     alias(libs.plugins.kotlin.android)
@@ -17,6 +27,18 @@ android {
         versionName = "1.0"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
+
+        // Делаем API_SECRET_TOKEN доступным в BuildConfig
+        // getStringProperty попытается прочитать значение. Если его нет, будет использовано значение по умолчанию "DEFAULT_TOKEN_PLACEHOLDER"
+        // Важно: Если токен не будет найден в local.properties, И вы не предоставите значение по умолчанию здесь,
+        // то будет ошибка сборки, если VpnViewModel попытается получить доступ к BuildConfig.API_SECRET_TOKEN.
+        // Вы можете сделать значение по умолчанию более очевидной заглушкой или даже вызвать ошибку сборки, если токен не найден.
+        val apiSecretToken: String = localProperties.getProperty("API_SECRET_TOKEN") ?: run {
+            println("WARNING: API_SECRET_TOKEN not found in local.properties. Using placeholder.")
+            "MISSING_TOKEN_CHECK_LOCAL_PROPERTIES" // Это значение попадет в BuildConfig, если токен не найден
+        }
+        buildConfigField("String", "API_SECRET_TOKEN", "\"$apiSecretToken\"")
+
     }
 
     buildTypes {
@@ -45,6 +67,7 @@ android {
 
     buildFeatures {
         compose = true
+        buildConfig = true
     }
 }
 

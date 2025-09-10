@@ -12,8 +12,6 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
 import com.wireguard.android.backend.Tunnel // Используем Tunnel.State
-// Не забудьте импортировать ваш VpnViewModel, если он в другом пакете
-// import com.playeverywhere999.vpn_for_friends_v3.VpnViewModel
 // и вашу тему
 // import com.playeverywhere999.vpn_for_friends_v3.ui.theme.VPN_for_friends_v3Theme
 
@@ -78,8 +76,8 @@ fun MainScreen(
                     viewModel.onConnectDisconnectClicked()
                 },
                 modifier = Modifier.fillMaxWidth(0.8f),
-                enabled = currentVpnState != Tunnel.State.TOGGLE || // Разрешаем нажимать, если TOGGLE, но есть ошибка
-                        (currentVpnState == Tunnel.State.TOGGLE && !lastErrorMessage.isNullOrEmpty())
+                // Кнопка активна, если состояние не TOGGLE, ИЛИ если состояние TOGGLE, но есть ошибка (позволяет Retry)
+                enabled = currentVpnState != Tunnel.State.TOGGLE || !lastErrorMessage.isNullOrEmpty()
             ) {
                 when (currentVpnState) {
                     Tunnel.State.DOWN -> {
