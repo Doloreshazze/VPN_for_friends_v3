@@ -1,4 +1,5 @@
 package com.playeverywhere999.vpn_for_friends_v3
+
 import android.Manifest
 import android.app.Application
 import android.content.pm.PackageManager
@@ -40,8 +41,6 @@ import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
 import java.net.InetAddress
 
-
-// Модель данных для ответа от сервера
 @Serializable
 data class ServerConfigData(
     val clientAssignedAddress: String,
@@ -77,7 +76,7 @@ class VpnViewModel(application: Application) : AndroidViewModel(application) {
     companion object {
         private const val TAG = "VpnViewModel"
         const val DEFAULT_TUNNEL_NAME = "MyFriendsVPN"
-        private const val MAX_CONFIG_FETCH_RETRIES = 2 // 0-я попытка + 2 ретрая = 3 всего
+        private const val MAX_CONFIG_FETCH_RETRIES = 2
         private const val RETRY_DELAY_MS = 2500L
     }
 
@@ -97,33 +96,32 @@ class VpnViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun onConnectDisconnectClicked() {
-        Log.d(TAG, "onConnectDisconnectClicked called. Current state: ${vpnState.value}, Config exists: ${preparedConfig.value != null}")
-
-        when (vpnState.value) {
+        Log.d(TAG, "onConnectDisconnectClicked called. Current state: ${_vpnState.value}, Config exists: ${_preparedConfig.value != null}")
+        when (_vpnState.value) {
             Tunnel.State.DOWN, null -> {
-                _lastErrorMessage.value = null 
-                _configStatusMessage.value = null // Explicitly clear status message
-                configFetchRetryCount = 0 
-                if (preparedConfig.value == null) {
-                    _isConnectingAfterConfigFetch.value = true // Intent: fetch config then connect
+                _lastErrorMessage.value = null
+                _configStatusMessage.value = null
+                configFetchRetryCount = 0
+                if (_preparedConfig.value == null) {
+                    _isConnectingAfterConfigFetch.value = true
                     startConfigGenerationAndFetch()
                 } else {
-                    _isConnectingAfterConfigFetch.value = false // No fetch needed, connect directly
+                    _isConnectingAfterConfigFetch.value = false
                     startVpnWithCurrentConfig()
                 }
             }
             Tunnel.State.UP -> {
                 _isConnectingAfterConfigFetch.value = false
-                _configStatusMessage.value = null // Clear status when stopping
+                _configStatusMessage.value = null
                 stopVpn()
             }
             Tunnel.State.TOGGLE -> {
-                if (!lastErrorMessage.value.isNullOrEmpty()) {
+                if (!_lastErrorMessage.value.isNullOrEmpty()) {
                     Log.d(TAG, "VPN is TOGGLE but has error, attempting to reconnect/reconfigure.")
-                    _lastErrorMessage.value = null 
-                    _configStatusMessage.value = null // Explicitly clear status message
-                    configFetchRetryCount = 0 
-                    _isConnectingAfterConfigFetch.value = true // Intent: fetch config then connect
+                    _lastErrorMessage.value = null
+                    _configStatusMessage.value = null
+                    configFetchRetryCount = 0
+                    _isConnectingAfterConfigFetch.value = true
                     _preparedConfig.value = null
                     startConfigGenerationAndFetch()
                 } else {
@@ -148,12 +146,11 @@ class VpnViewModel(application: Application) : AndroidViewModel(application) {
                 lastAttemptNumber = currentAttempt
                 _preparedConfig.value = null
 
-                if (configFetchRetryCount > 0) { 
-                    // Log removed: Retrying Log Point: Just before setting 'Retrying config fetch...' message. _lastErrorMessage.value = '${_lastErrorMessage.value}'
+                if (configFetchRetryCount > 0) {
                     _configStatusMessage.value = "Retrying config fetch ($currentAttempt/${MAX_CONFIG_FETCH_RETRIES + 1})..."
                     Log.d(TAG, "Retrying config fetch. Attempt: $currentAttempt. Delaying for $RETRY_DELAY_MS ms.")
                     delay(RETRY_DELAY_MS)
-                } else { // First attempt (configFetchRetryCount == 0)
+                } else {
                     _configStatusMessage.value = "Generating client keys..."
                 }
                 Log.d(TAG, "Starting config generation and fetch process. Attempt: $currentAttempt")
@@ -171,21 +168,23 @@ class VpnViewModel(application: Application) : AndroidViewModel(application) {
                     if (serverDataActual != null) {
                         Log.d(TAG, "Server data received on attempt $currentAttempt: $serverDataActual")
                         _configStatusMessage.value = "Configuration received. Preparing tunnel..."
-                        val finalConfig = buildClientConfig(newClientKeyPair, serverDataActual)
-                        _preparedConfig.value = finalConfig 
+                        val finalConfig = withContext(Dispatchers.IO) {
+                            buildClientConfig(newClientKeyPair, serverDataActual)
+                        }
+                        _preparedConfig.value = finalConfig
                         _configStatusMessage.value = "Configuration ready!"
                         Log.d(TAG, "WireGuard config prepared successfully on attempt $currentAttempt.")
 
                         success = true
-                        
+
                         val shouldConnectAfterThisFetch = _isConnectingAfterConfigFetch.value == true
 
                         if (shouldConnectAfterThisFetch) {
                             Log.d(TAG, "Configuration fetched. Auto-connecting as requested...")
                             startVpnWithCurrentConfig()
                         }
-                        
-                        _isConnectingAfterConfigFetch.value = false 
+
+                        _isConnectingAfterConfigFetch.value = false
 
                     } else {
                         Log.e(TAG, "Failed to get server configuration (serverDataActual is null) on attempt $currentAttempt.")
@@ -198,35 +197,33 @@ class VpnViewModel(application: Application) : AndroidViewModel(application) {
                     handleConfigFetchError("Error: Bad config string. ${e.message}", e, currentAttempt)
                 } catch (e: IllegalArgumentException) {
                     handleConfigFetchError("Error: Invalid argument in config. ${e.message}", e, currentAttempt)
-                } catch (e: Exception) { 
+                } catch (e: Exception) {
                     handleConfigFetchError("Error: ${e.message ?: "Failed to get configuration"}", e, currentAttempt)
                 }
 
                 if (!success) {
                     configFetchRetryCount++
                 } else {
-                    configFetchRetryCount = 0 
+                    configFetchRetryCount = 0
                 }
-            } 
+            }
 
-            if (!success) { 
+            if (!success) {
                 Log.e(TAG, "All config fetch attempts failed after $lastAttemptNumber attempts.")
-                _isConnectingAfterConfigFetch.value = false 
+                _isConnectingAfterConfigFetch.value = false
             }
         }
     }
 
     private fun handleConfigFetchError(baseErrorMessage: String, exception: Exception?, attempt: Int) {
         val fullErrorMessage = exception?.message?.let { "$baseErrorMessage - Details: $it" } ?: baseErrorMessage
-        Log.e(TAG, "handleConfigFetchError: CALLED for attempt $attempt. Current configFetchRetryCount = $configFetchRetryCount. MAX_RETRIES = $MAX_CONFIG_FETCH_RETRIES. Error: '$fullErrorMessage'", exception)
-        _preparedConfig.value = null 
+        Log.e(TAG, "handleConfigFetchError: CALLED for attempt $attempt. Current configFetchRetryCount = $configFetchRetryCount. Error: '$fullErrorMessage'", exception)
+        _preparedConfig.value = null
 
         if (configFetchRetryCount >= MAX_CONFIG_FETCH_RETRIES) {
             Log.d(TAG, "handleConfigFetchError: FINAL ATTEMPT FAILED (attempt $attempt, configFetchRetryCount $configFetchRetryCount). Setting _lastErrorMessage.")
-            _lastErrorMessage.value = fullErrorMessage 
-            _configStatusMessage.value = "Error: Config fetch failed after $attempt attempts. Please check connection or try later." 
-            _isConnectingAfterConfigFetch.value = false 
-            Log.e(TAG, "Max retries for config fetch. Final error set to: '$fullErrorMessage'")
+            _lastErrorMessage.value = fullErrorMessage
+            _configStatusMessage.value = "Error: Config fetch failed after $attempt attempts. Please check connection or try later."
         } else {
             Log.d(TAG, "handleConfigFetchError: INTERMEDIATE ATTEMPT FAILED (attempt $attempt, configFetchRetryCount $configFetchRetryCount). NOT setting _lastErrorMessage. Will retry.")
         }
@@ -239,58 +236,75 @@ class VpnViewModel(application: Application) : AndroidViewModel(application) {
                     json(Json { ignoreUnknownKeys = true })
                 }
                 install(Logging) {
-                    level = LogLevel.INFO 
+                    level = LogLevel.INFO
                 }
             }
             val token = API_SECRET_TOKEN
             Log.d(TAG, "Using API_SECRET_TOKEN (first 5 chars): ${token.take(5)}...")
 
-            val response: ServerConfigData = client.post("https://vpnforfriends.com/api/config") {
+            val response: ServerConfigData = client.post("https://vpnforfriends.com:8443/api/config") {
                 contentType(ContentType.Application.Json)
                 setBody(
                     mapOf(
-                        "username" to "test",
-                        "password" to "test",
-                        "client_public_key" to clientPublicKeyForServer,
-                        "token" to token
+                        "token" to token,
+                        "client_public_key" to clientPublicKeyForServer
                     )
                 )
             }.body()
             client.close()
+            Log.d(TAG, "Successfully fetched config: $response")
             response
         } catch (e: Exception) {
-            Log.w(TAG, "Error fetching or parsing config from API: ${e.message}") 
+            Log.e(TAG, "Error fetching config from API: ${e.message}", e)
             null
         }
     }
 
-    private fun buildClientConfig(
+    private suspend fun buildClientConfig(
         clientKeys: KeyPair,
         serverData: ServerConfigData,
     ): Config {
+        val resolvedEndpointString = withContext(Dispatchers.IO) {
+            val host = serverData.serverEndpoint.split(":").first()
+            val port = serverData.serverEndpoint.split(":").last()
+            try {
+                val ip = InetAddress.getByName(host).hostAddress
+                Log.d(TAG, "Resolved hostname $host to IP $ip")
+                "$ip:$port"
+            } catch (e: Exception) {
+                Log.e(TAG, "Failed to resolve hostname $host: ${e.message}, using original endpoint", e)
+                serverData.serverEndpoint
+            }
+        }
+
+        Log.d(TAG, "Building WireGuard config with endpoint: $resolvedEndpointString, client address: ${serverData.clientAssignedAddress}, server public key: ${serverData.serverPublicKey}")
+
         val interfaceBuilder = Interface.Builder()
             .setKeyPair(clientKeys)
             .addAddress(InetNetwork.parse(serverData.clientAssignedAddress))
+            .setMtu(1280) // Уменьшенный MTU для совместимости
         serverData.dnsServers.forEach { dnsString ->
             try {
-                val dnsInetAddress: InetAddress = InetAddress.getByName(dnsString.trim())
+                val dnsInetAddress = withContext(Dispatchers.IO) {
+                    InetAddress.getByName(dnsString) // Используем dnsServers из serverData
+                }
                 interfaceBuilder.addDnsServer(dnsInetAddress)
+                Log.d(TAG, "Added DNS server: $dnsString")
             } catch (e: java.net.UnknownHostException) {
                 Log.w(TAG, "Invalid or unknown DNS server host: $dnsString", e)
             } catch (e: Exception) {
                 Log.w(TAG, "Error processing DNS server: $dnsString", e)
             }
         }
-        val filteredAllowedIps = serverData.allowedIps.filter { ip ->
-            ip.contains(".")
-        }
+
         val peerBuilder = Peer.Builder()
             .setPublicKey(Key.fromBase64(serverData.serverPublicKey))
-            .setEndpoint(InetEndpoint.parse(serverData.serverEndpoint))
+            .setEndpoint(InetEndpoint.parse(resolvedEndpointString))
             .also { builder ->
-                filteredAllowedIps.forEach { allowedIp ->
+                serverData.allowedIps.forEach { allowedIp ->
                     try {
                         builder.addAllowedIp(InetNetwork.parse(allowedIp))
+                        Log.d(TAG, "Added AllowedIP: $allowedIp")
                     } catch (e: Exception) {
                         Log.w(TAG, "Skipping invalid allowed IP: $allowedIp", e)
                     }
@@ -298,20 +312,25 @@ class VpnViewModel(application: Application) : AndroidViewModel(application) {
             }
         serverData.persistentKeepalive?.let {
             peerBuilder.setPersistentKeepalive(it)
+            Log.d(TAG, "Set PersistentKeepalive: $it")
         }
-        return Config.Builder()
+
+        val config = Config.Builder()
             .setInterface(interfaceBuilder.build())
             .addPeer(peerBuilder.build())
             .build()
+
+        Log.d(TAG, "WireGuard config built: ${config.toWgQuickString()}")
+        return config
     }
 
     private fun startVpnWithCurrentConfig() {
         val currentConfig = preparedConfig.value
         if (currentConfig == null) {
             Log.e(TAG, "Cannot start VPN: config is null. Attempting to re-fetch.")
-            _vpnState.value = Tunnel.State.DOWN 
-            configFetchRetryCount = 0 
-            _isConnectingAfterConfigFetch.value = true 
+            _vpnState.value = Tunnel.State.DOWN
+            configFetchRetryCount = 0
+            _isConnectingAfterConfigFetch.value = true
             startConfigGenerationAndFetch()
             return
         }
@@ -326,10 +345,10 @@ class VpnViewModel(application: Application) : AndroidViewModel(application) {
         }
         if (vpnPrepareIntent != null || !notificationsGranted) {
             Log.d(TAG, "Permissions needed. VPN Prepare: ${vpnPrepareIntent != null}, Notifications Granted: $notificationsGranted. Signalling Activity.")
-            _requestPermissionsEvent.value = Event(Unit) 
+            _requestPermissionsEvent.value = Event(Unit)
             return
         }
-        Log.d(TAG, "Attempting to start VPN with current config (permissions granted).")
+        Log.d(TAG, "Attempting to start VPN with current config (permissions granted). Config: ${currentConfig.toWgQuickString()}")
         val intent = MyWgVpnService.newIntent(
             context = getApplication(),
             action = MyWgVpnService.ACTION_CONNECT,
@@ -345,13 +364,13 @@ class VpnViewModel(application: Application) : AndroidViewModel(application) {
             setIntermediateVpnState(Tunnel.State.TOGGLE)
         } catch (e: Exception) {
             Log.e(TAG, "Failed to start VPN service", e)
-            _lastErrorMessage.value = "Error: Could not start VPN service. ${e.message}" 
-            _vpnState.value = Tunnel.State.DOWN 
+            _lastErrorMessage.value = "Error: Could not start VPN service. ${e.message}"
+            setIntermediateVpnState(Tunnel.State.DOWN)
         }
     }
 
     private fun stopVpn() {
-        Log.d(TAG, "Attempting to stop VPN.")
+        Log.d(TAG, "stopVpn: Stopping VPN.")
         val intent = MyWgVpnService.newIntent(
             context = getApplication(),
             action = MyWgVpnService.ACTION_DISCONNECT,
@@ -361,14 +380,15 @@ class VpnViewModel(application: Application) : AndroidViewModel(application) {
             getApplication<Application>().startService(intent)
             setIntermediateVpnState(Tunnel.State.TOGGLE)
         } catch (e: Exception) {
-            Log.e(TAG, "Failed to send stop command to VPN service", e)
-            _lastErrorMessage.value = "Error: Could not stop VPN service. ${e.message}" 
+            Log.e(TAG, "Failed to stop VPN service", e)
+            _lastErrorMessage.value = "Error: Could not stop VPN service. ${e.message}"
+            setIntermediateVpnState(Tunnel.State.DOWN)
         }
     }
 
     fun clearLastError() {
         _lastErrorMessage.value = null
-        _configStatusMessage.value = null // Always clear configStatusMessage
+        _configStatusMessage.value = null
         configFetchRetryCount = 0
         Log.d(TAG, "clearLastError: Called. _lastErrorMessage and _configStatusMessage are now null. configFetchRetryCount is 0.")
     }
@@ -395,13 +415,12 @@ class VpnViewModel(application: Application) : AndroidViewModel(application) {
             _configStatusMessage.value = "VPN Connected"
             Log.d(TAG, "setExternalVpnState: Service reported UP. _lastErrorMessage cleared.")
         }
-        // For Tunnel.State.TOGGLE, status is typically handled by setIntermediateVpnState
     }
 
     fun setIntermediateVpnState(intermediateState: Tunnel.State) {
-        _vpnState.value = intermediateState 
+        _vpnState.value = intermediateState
         if (intermediateState == Tunnel.State.TOGGLE) {
-            _configStatusMessage.value = "Processing..." 
+            _configStatusMessage.value = "Processing..."
         }
     }
 
