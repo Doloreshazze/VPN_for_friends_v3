@@ -33,22 +33,22 @@ private fun isConfigInProgress(configStatus: String?): Boolean {
 @Composable
 private fun ConnectionStatusIndicator(
     vpnState: Tunnel.State, 
-    isEnabled: Boolean, // New parameter to control color when disabled
+    isEnabled: Boolean, 
     size: Dp = 20.dp, 
-    modifier: Modifier = Modifier
+    modifier: Modifier = Modifier // Allow passing custom modifiers, e.g., for alignment
 ) {
     val indicatorColor = if (!isEnabled) {
         Color.Gray
     } else {
         when (vpnState) {
             Tunnel.State.UP -> Color.Green
-            Tunnel.State.DOWN -> Color.Red // Used for Connect (default/down) and Retry states
-            else -> Color.Gray // Default to gray if state is unexpected for an enabled indicator
+            Tunnel.State.DOWN -> Color.Red 
+            else -> Color.Gray 
         }
     }
 
     Box(
-        modifier = modifier
+        modifier = modifier // Apply passed modifier here
             .size(size) 
             .background(indicatorColor, CircleShape)
     )
@@ -140,22 +140,37 @@ fun MainScreen(
                     }
                 },
                 modifier = Modifier.fillMaxWidth(0.8f),
-                enabled = isButtonEnabled
+                enabled = isButtonEnabled,
+                contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp) 
             ) {
-                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.Center) {
+                Box(
+                    modifier = Modifier.fillMaxWidth(),
+                    // contentAlignment = Alignment.Center // Default for Box, children can override
+                ) {
+                    val textToShow:
+                    @Composable
+                    () -> Unit
+                    val indicatorToShow:
+                    @Composable
+                    ((Modifier) -> Unit)? // Takes a Modifier for alignment
+
                     if (lastErrorMessage != null) {
-                        Text(stringResource(id = R.string.button_retry))
-                        Spacer(Modifier.width(8.dp))
-                        ConnectionStatusIndicator(vpnState = Tunnel.State.DOWN, isEnabled = isButtonEnabled) // isButtonEnabled will be true here
+                        textToShow = { Text(stringResource(id = R.string.button_retry)) }
+                        indicatorToShow = { modifier -> ConnectionStatusIndicator(vpnState = Tunnel.State.DOWN, isEnabled = isButtonEnabled, modifier = modifier) }
                     } else if (currentVpnState == Tunnel.State.UP) {
-                        Text(stringResource(id = R.string.button_disconnect))
-                        Spacer(Modifier.width(8.dp))
-                        ConnectionStatusIndicator(vpnState = Tunnel.State.UP, isEnabled = isButtonEnabled) // isButtonEnabled will be true here
+                        textToShow = { Text(stringResource(id = R.string.button_disconnect)) }
+                        indicatorToShow = { modifier -> ConnectionStatusIndicator(vpnState = Tunnel.State.UP, isEnabled = isButtonEnabled, modifier = modifier) }
                     } else {
-                        Text(stringResource(id = R.string.button_connect))
-                        Spacer(Modifier.width(8.dp))
-                        ConnectionStatusIndicator(vpnState = Tunnel.State.DOWN, isEnabled = isButtonEnabled) // Color changes if button is disabled
+                        textToShow = { Text(stringResource(id = R.string.button_connect)) }
+                        indicatorToShow = { modifier -> ConnectionStatusIndicator(vpnState = Tunnel.State.DOWN, isEnabled = isButtonEnabled, modifier = modifier) }
                     }
+
+                    // Text centered in the Box
+                    Box(modifier = Modifier.align(Alignment.Center)) {
+                        textToShow()
+                    }
+                    // Indicator aligned to the end of the Box
+                    indicatorToShow?.invoke(Modifier.align(Alignment.CenterEnd))
                 }
             }
         }
@@ -172,11 +187,10 @@ fun MainScreenPreviewDownIdle() {
         ) {
             StatusMessageDisplay(vpnState = Tunnel.State.DOWN, lastError = null, configStatus = null)
             Spacer(modifier = Modifier.height(48.dp))
-            Button(onClick = {}, enabled = true) {
-                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.Center) { 
-                    Text(stringResource(R.string.button_connect)) 
-                    Spacer(Modifier.width(8.dp))
-                    ConnectionStatusIndicator(vpnState = Tunnel.State.DOWN, isEnabled = true)
+            Button(onClick = {}, enabled = true, contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp)) {
+                Box(modifier = Modifier.fillMaxWidth()) {
+                    Box(modifier = Modifier.align(Alignment.Center)) { Text(stringResource(R.string.button_connect)) }
+                    ConnectionStatusIndicator(vpnState = Tunnel.State.DOWN, isEnabled = true, modifier = Modifier.align(Alignment.CenterEnd))
                 }
             }
         }
@@ -193,11 +207,10 @@ fun MainScreenPreviewUp() {
         ) {
             StatusMessageDisplay(vpnState = Tunnel.State.UP, lastError = null, configStatus = null) 
             Spacer(modifier = Modifier.height(48.dp)) 
-            Button(onClick = {}, enabled = true) {
-                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.Center) { 
-                    Text(stringResource(R.string.button_disconnect)) 
-                    Spacer(Modifier.width(8.dp))
-                    ConnectionStatusIndicator(vpnState = Tunnel.State.UP, isEnabled = true)
+            Button(onClick = {}, enabled = true, contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp)) {
+                 Box(modifier = Modifier.fillMaxWidth()) {
+                    Box(modifier = Modifier.align(Alignment.Center)) { Text(stringResource(R.string.button_disconnect)) }
+                    ConnectionStatusIndicator(vpnState = Tunnel.State.UP, isEnabled = true, modifier = Modifier.align(Alignment.CenterEnd))
                 }
             }
         }
@@ -214,11 +227,10 @@ fun MainScreenPreviewToggleConnecting() {
         ) {
             StatusMessageDisplay(vpnState = Tunnel.State.TOGGLE, lastError = null, configStatus = "Contacting server...")
             Spacer(modifier = Modifier.height(16.dp))
-            Button(onClick = {}, enabled = false) { 
-                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.Center) {
-                    Text(stringResource(R.string.button_connect))
-                    Spacer(Modifier.width(8.dp))
-                    ConnectionStatusIndicator(vpnState = Tunnel.State.DOWN, isEnabled = false) // Indicator will be gray
+            Button(onClick = {}, enabled = false, contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp)) { 
+                 Box(modifier = Modifier.fillMaxWidth()) {
+                    Box(modifier = Modifier.align(Alignment.Center)) { Text(stringResource(R.string.button_connect)) }
+                    ConnectionStatusIndicator(vpnState = Tunnel.State.DOWN, isEnabled = false, modifier = Modifier.align(Alignment.CenterEnd))
                 }
             }
         }
@@ -235,11 +247,10 @@ fun MainScreenPreviewDownWithError() {
         ) {
             StatusMessageDisplay(vpnState = Tunnel.State.DOWN, lastError = "Sample Error", configStatus = "Error: Something bad")
             Spacer(modifier = Modifier.height(16.dp))
-            Button(onClick = {}, enabled = true) { 
-                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.Center) {
-                    Text(stringResource(R.string.button_retry)) 
-                    Spacer(Modifier.width(8.dp))
-                    ConnectionStatusIndicator(vpnState = Tunnel.State.DOWN, isEnabled = true) // Red for Retry
+            Button(onClick = {}, enabled = true, contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp)) { 
+                Box(modifier = Modifier.fillMaxWidth()) {
+                    Box(modifier = Modifier.align(Alignment.Center)) { Text(stringResource(R.string.button_retry)) }
+                    ConnectionStatusIndicator(vpnState = Tunnel.State.DOWN, isEnabled = true, modifier = Modifier.align(Alignment.CenterEnd))
                 }
             }
         }
@@ -256,11 +267,10 @@ fun MainScreenPreviewDownConfigInProgress() {
         ) {
             StatusMessageDisplay(vpnState = Tunnel.State.DOWN, lastError = null, configStatus = "Generating keypair...")
             Spacer(modifier = Modifier.height(16.dp))
-            Button(onClick = {}, enabled = false) { 
-                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.Center) {
-                    Text(stringResource(R.string.button_connect))
-                    Spacer(Modifier.width(8.dp))
-                    ConnectionStatusIndicator(vpnState = Tunnel.State.DOWN, isEnabled = false) // Indicator will be gray
+            Button(onClick = {}, enabled = false, contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp)) { 
+                Box(modifier = Modifier.fillMaxWidth()) {
+                    Box(modifier = Modifier.align(Alignment.Center)) { Text(stringResource(R.string.button_connect)) }
+                    ConnectionStatusIndicator(vpnState = Tunnel.State.DOWN, isEnabled = false, modifier = Modifier.align(Alignment.CenterEnd))
                 }
             }
         }
