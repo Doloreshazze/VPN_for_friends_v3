@@ -1,0 +1,11 @@
+<resources>
+    <string name="status_error">出错了。</string>
+    <string name="status_established">连接已建立。</string>
+    <string name="status_connecting">连接中...</string>
+    <string name="vpn_status_format">VPN状态：%1$s</string>
+    <string name="button_retry">重试</string>
+    <string name="button_connect">连接</string>
+    <string name="button_disconnect">断开连接</string>
+    <string name="status_processing">处理中...</string>
+    <string name="content_desc_loading">加载指示器</string>
+</resources>

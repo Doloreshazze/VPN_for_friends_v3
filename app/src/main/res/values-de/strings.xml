@@ -1,0 +1,11 @@
+<resources>
+    <string name="status_error">Etwas ist schiefgelaufen.</string>
+    <string name="status_established">Verbindung hergestellt.</string>
+    <string name="status_connecting">Verbinde...</string>
+    <string name="vpn_status_format">VPN-Status: %1$s</string>
+    <string name="button_retry">Wiederholen</string>
+    <string name="button_connect">Verbinden</string>
+    <string name="button_disconnect">Trennen</string>
+    <string name="status_processing">Verarbeite...</string>
+    <string name="content_desc_loading">Ladeanzeige</string>
+</resources>

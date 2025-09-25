@@ -1,0 +1,11 @@
+<resources>
+    <string name="status_error">Что-то пошло не так.</string>
+    <string name="status_established">Подключение установлено.</string>
+    <string name="status_connecting">Подключаемся...</string>
+    <string name="vpn_status_format">Статус VPN: %1$s</string>
+    <string name="button_retry">Повторить</string>
+    <string name="button_connect">Подключить</string>
+    <string name="button_disconnect">Отключить</string>
+    <string name="status_processing">Обработка...</string>
+    <string name="content_desc_loading">Индикатор загрузки</string>
+</resources>

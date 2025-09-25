@@ -1,9 +1,22 @@
 <resources>
-<string name="app_name">VPN_for_friends_v3</string>
-<string name="vpn_notification_channel_name">VPN Service</string>
-<string name="vpn_notification_channel_description">Notifies about active VPN connection
-    </string>
-<string name="vpn_status_connected">Connected</string>
-<string name="vpn_status_disconnected">Disconnected</string>
-<string name="vpn_disconnect_button">Disconnect</string>
+    <string name="app_name">VPN_for_friends_v3</string>
+
+    <!-- Existing notification strings -->
+    <string name="vpn_notification_channel_name">VPN Service</string>
+    <string name="vpn_notification_channel_description">Notifies about active VPN connection</string>
+    <string name="vpn_status_connected">Connected</string>
+    <string name="vpn_status_disconnected">Disconnected</string>
+    <string name="vpn_disconnect_button">Disconnect</string> <!-- Kept for other potential uses, but MainScreen uses button_disconnect -->
+
+    <!-- New strings for MainScreen -->
+    <string name="status_error">Something went wrong.</string>
+    <string name="status_established">Connection established.</string>
+    <string name="status_connecting">Connecting...</string>
+    <string name="vpn_status_format">VPN Status: %1$s</string>
+    <string name="button_retry">Retry</string>
+    <string name="button_connect">Connect</string>
+    <string name="button_disconnect">Disconnect</string>
+    <string name="status_processing">Processing...</string> <!-- Kept in case it's used elsewhere, though MainScreen now uses status_connecting for this button state -->
+    <string name="content_desc_loading">Loading indicator</string>
+
 </resources>
