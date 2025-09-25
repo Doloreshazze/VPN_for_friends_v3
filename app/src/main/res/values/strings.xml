@@ -1,5 +1,5 @@
 <resources>
-    <string name="app_name">VPN_for_friends_v3</string>
+    <string name="app_name" translatable="false">VPN for friends</string>
 
     <!-- Existing notification strings -->
     <string name="vpn_notification_channel_name">VPN Service</string>
