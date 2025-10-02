@@ -80,7 +80,7 @@ dependencies {
     implementation("org.jetbrains.kotlinx:kotlinx-serialization-json:1.9.0") // Последняя версия
     implementation("io.ktor:ktor-client-logging:$ktorVersion")
     implementation("androidx.compose.runtime:runtime-livedata:1.7.4") // Обновлено
-
+    implementation("com.google.android.ump:user-messaging-platform:2.2.0") // Или более новая версия, если доступна
     implementation("com.wireguard.android:tunnel:1.0.20230706")
 
     implementation(libs.androidx.lifecycle.viewmodel.ktx)

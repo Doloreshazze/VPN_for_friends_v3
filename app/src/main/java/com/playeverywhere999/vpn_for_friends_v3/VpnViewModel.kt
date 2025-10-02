@@ -100,13 +100,16 @@ class VpnViewModel(application: Application) : AndroidViewModel(application) {
         when (_vpnState.value) {
             Tunnel.State.DOWN, null -> {
                 _lastErrorMessage.value = null
-                _configStatusMessage.value = null
+                // _configStatusMessage.value = null // Cleared at the start of startConfigGenerationAndFetch or if config exists
                 configFetchRetryCount = 0
                 if (_preparedConfig.value == null) {
                     _isConnectingAfterConfigFetch.value = true
+                    // Set initial status message for config preparation
+                    _configStatusMessage.value = getApplication<Application>().getString(R.string.status_preparing_config)
                     startConfigGenerationAndFetch()
                 } else {
                     _isConnectingAfterConfigFetch.value = false
+                     _configStatusMessage.value = null // Clear if we are starting with existing config
                     startVpnWithCurrentConfig()
                 }
             }
@@ -119,14 +122,17 @@ class VpnViewModel(application: Application) : AndroidViewModel(application) {
                 if (!_lastErrorMessage.value.isNullOrEmpty()) {
                     Log.d(TAG, "VPN is TOGGLE but has error, attempting to reconnect/reconfigure.")
                     _lastErrorMessage.value = null
-                    _configStatusMessage.value = null
+                    // _configStatusMessage.value = null // Cleared at start of startConfigGenerationAndFetch
                     configFetchRetryCount = 0
                     _isConnectingAfterConfigFetch.value = true
                     _preparedConfig.value = null
+                     // Set initial status message for config preparation
+                    _configStatusMessage.value = getApplication<Application>().getString(R.string.status_preparing_config)
                     startConfigGenerationAndFetch()
                 } else {
                     Log.d(TAG, "VPN is already toggling, click ignored.")
-                    _configStatusMessage.value = "Processing, please wait..."
+                    // If already toggling and no error, message should reflect processing state, which setIntermediateVpnState handles.
+                    // _configStatusMessage.value = "Processing, please wait..." // This might be set by setIntermediateVpnState
                 }
             }
         }
@@ -138,6 +144,10 @@ class VpnViewModel(application: Application) : AndroidViewModel(application) {
             var success = false
             if (configFetchRetryCount == 0) {
                 _lastErrorMessage.value = null
+                 // Initial message is set in onConnectDisconnectClicked, subsequent messages will be more specific (retrying, generating keys etc)
+                if (_configStatusMessage.value != getApplication<Application>().getString(R.string.status_preparing_config)) {
+                    _configStatusMessage.value = getApplication<Application>().getString(R.string.status_preparing_config) // Ensure it starts here if not already set
+                }
             }
 
             var lastAttemptNumber = 0
@@ -151,7 +161,8 @@ class VpnViewModel(application: Application) : AndroidViewModel(application) {
                     Log.d(TAG, "Retrying config fetch. Attempt: $currentAttempt. Delaying for $RETRY_DELAY_MS ms.")
                     delay(RETRY_DELAY_MS)
                 } else {
-                    _configStatusMessage.value = "Generating client keys..."
+                    // First attempt, message already set to "Preparing config..." or will be updated to "Generating client keys..."
+                     _configStatusMessage.value = "Generating client keys..." // More specific than "Preparing config"
                 }
                 Log.d(TAG, "Starting config generation and fetch process. Attempt: $currentAttempt")
 
@@ -160,7 +171,8 @@ class VpnViewModel(application: Application) : AndroidViewModel(application) {
                     clientKeyPair = newClientKeyPair
                     val clientPublicKeyForServer = newClientKeyPair.publicKey.toBase64()
 
-                    if (configFetchRetryCount == 0 && currentAttempt == 1) _configStatusMessage.value = "Client keys generated. Contacting server..."
+                    // Update status after keys are generated and before server contact
+                    _configStatusMessage.value = "Client keys generated. Contacting server..."
                     Log.d(TAG, "Client keys generated for attempt $currentAttempt. Public Key (for server): $clientPublicKeyForServer")
 
                     val serverDataActual: ServerConfigData? = fetchConfigFromRealApi(clientPublicKeyForServer)
@@ -181,7 +193,9 @@ class VpnViewModel(application: Application) : AndroidViewModel(application) {
 
                         if (shouldConnectAfterThisFetch) {
                             Log.d(TAG, "Configuration fetched. Auto-connecting as requested...")
-                            startVpnWithCurrentConfig()
+                            startVpnWithCurrentConfig() // This will set TOGGLE and then processing message via setIntermediateVpnState
+                        } else {
+                             _configStatusMessage.value = "Configuration ready! Tap connect."
                         }
 
                         _isConnectingAfterConfigFetch.value = false
@@ -204,13 +218,14 @@ class VpnViewModel(application: Application) : AndroidViewModel(application) {
                 if (!success) {
                     configFetchRetryCount++
                 } else {
-                    configFetchRetryCount = 0
+                    configFetchRetryCount = 0 // Reset on success
                 }
             }
 
             if (!success) {
                 Log.e(TAG, "All config fetch attempts failed after $lastAttemptNumber attempts.")
                 _isConnectingAfterConfigFetch.value = false
+                // Error message already set by handleConfigFetchError on final attempt
             }
         }
     }
@@ -225,7 +240,9 @@ class VpnViewModel(application: Application) : AndroidViewModel(application) {
             _lastErrorMessage.value = fullErrorMessage
             _configStatusMessage.value = "Error: Config fetch failed after $attempt attempts. Please check connection or try later."
         } else {
+            // For intermediate errors, the message for retrying is set in the main loop
             Log.d(TAG, "handleConfigFetchError: INTERMEDIATE ATTEMPT FAILED (attempt $attempt, configFetchRetryCount $configFetchRetryCount). NOT setting _lastErrorMessage. Will retry.")
+             _configStatusMessage.value = "Config fetch attempt $attempt failed. Retrying..." // Message for UI that retry will happen
         }
     }
 
@@ -236,7 +253,7 @@ class VpnViewModel(application: Application) : AndroidViewModel(application) {
                     json(Json { ignoreUnknownKeys = true })
                 }
                 install(Logging) {
-                    level = LogLevel.INFO
+                    level = LogLevel.INFO // Changed to INFO to reduce noise for successful calls
                 }
             }
             val token = API_SECRET_TOKEN
@@ -331,6 +348,7 @@ class VpnViewModel(application: Application) : AndroidViewModel(application) {
             _vpnState.value = Tunnel.State.DOWN
             configFetchRetryCount = 0
             _isConnectingAfterConfigFetch.value = true
+            _configStatusMessage.value = getApplication<Application>().getString(R.string.status_preparing_config) // Reset for re-fetch
             startConfigGenerationAndFetch()
             return
         }
@@ -361,11 +379,11 @@ class VpnViewModel(application: Application) : AndroidViewModel(application) {
             } else {
                 getApplication<Application>().startService(intent)
             }
-            setIntermediateVpnState(Tunnel.State.TOGGLE)
+            setIntermediateVpnState(Tunnel.State.TOGGLE) // This will set _configStatusMessage to "Processing..."
         } catch (e: Exception) {
             Log.e(TAG, "Failed to start VPN service", e)
             _lastErrorMessage.value = "Error: Could not start VPN service. ${e.message}"
-            setIntermediateVpnState(Tunnel.State.DOWN)
+            setIntermediateVpnState(Tunnel.State.DOWN) // This will set _configStatusMessage to "VPN Disconnected"
         }
     }
 
@@ -378,11 +396,11 @@ class VpnViewModel(application: Application) : AndroidViewModel(application) {
         )
         try {
             getApplication<Application>().startService(intent)
-            setIntermediateVpnState(Tunnel.State.TOGGLE)
+            setIntermediateVpnState(Tunnel.State.TOGGLE) // This will set _configStatusMessage to "Processing..."
         } catch (e: Exception) {
             Log.e(TAG, "Failed to stop VPN service", e)
             _lastErrorMessage.value = "Error: Could not stop VPN service. ${e.message}"
-            setIntermediateVpnState(Tunnel.State.DOWN)
+            setIntermediateVpnState(Tunnel.State.DOWN) // This will set _configStatusMessage to "VPN Disconnected"
         }
     }
 
@@ -408,19 +426,34 @@ class VpnViewModel(application: Application) : AndroidViewModel(application) {
                     Log.d(TAG, "setExternalVpnState: Service reported DOWN with a non-retrying error. _lastErrorMessage SET.")
                 }
             } else {
-                _configStatusMessage.value = "VPN Disconnected"
+                // Only set to "VPN Disconnected" if no other specific status (like "Config ready! Tap connect") is more appropriate
+                if (_configStatusMessage.value?.contains("Configuration ready", ignoreCase = true) != true) {
+                    _configStatusMessage.value = "VPN Disconnected"
+                }
             }
         } else if (newState == Tunnel.State.UP) {
             _lastErrorMessage.value = null
             _configStatusMessage.value = "VPN Connected"
             Log.d(TAG, "setExternalVpnState: Service reported UP. _lastErrorMessage cleared.")
+        } else if (newState == Tunnel.State.TOGGLE) {
+             // If state becomes TOGGLE externally (e.g., service starts toggling itself after config is ready and connect is called)
+             // we might want to ensure the configStatusMessage shows "Processing..."
+             // This is already handled by setIntermediateVpnState, which is called before external state changes to TOGGLE.
         }
     }
 
+    // Called when the ViewModel itself initiates a state change to TOGGLE (e.g. before starting service)
     fun setIntermediateVpnState(intermediateState: Tunnel.State) {
         _vpnState.value = intermediateState
         if (intermediateState == Tunnel.State.TOGGLE) {
-            _configStatusMessage.value = "Processing..."
+            // This is the primary place to set "Processing..." when connection/disconnection starts
+            _configStatusMessage.value = getApplication<Application>().getString(R.string.status_processing) // Use string resource
+        } else if (intermediateState == Tunnel.State.DOWN && _lastErrorMessage.value == null && _preparedConfig.value == null) {
+             // If moving to DOWN, no error, and no config, it's likely after a failed config attempt or cleared state
+             // _configStatusMessage.value = "Ready to connect" // Or null, or specific instruction
+        } else if (intermediateState == Tunnel.State.DOWN && _lastErrorMessage.value == null && _preparedConfig.value != null) {
+            // If moving to DOWN, no error, but config exists (e.g. after a disconnect)
+            // _configStatusMessage.value = "Disconnected. Ready to connect."
         }
     }
 

@@ -1,18 +1,21 @@
 package com.playeverywhere999.vpn_for_friends_v3
 
-import com.playeverywhere999.vpn_for_friends_v3.util.EventObserver // Убедитесь, что этот util.EventObserver существует
+import com.playeverywhere999.vpn_for_friends_v3.util.EventObserver
 import android.Manifest
 import android.app.Activity
 import android.app.AlertDialog
-// import android.content.Intent // Не используется напрямую, если все через ViewModel/Service
 import android.content.pm.PackageManager
+import android.content.res.Configuration // <-- Добавлен импорт
+import android.graphics.Color
 import android.net.VpnService
 import android.os.Build
 import android.os.Bundle
 import android.util.Log
 import android.widget.Toast
 import androidx.activity.ComponentActivity
+import androidx.activity.SystemBarStyle
 import androidx.activity.compose.setContent
+import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.activity.viewModels
 import androidx.compose.foundation.layout.fillMaxSize
@@ -22,17 +25,23 @@ import androidx.compose.ui.Modifier
 import androidx.core.content.ContextCompat
 import com.playeverywhere999.vpn_for_friends_v3.ui.theme.VPN_for_friends_v3Theme
 import com.wireguard.android.backend.Tunnel
+// --- UMP SDK Imports ---
+import com.google.android.ump.ConsentForm
+import com.google.android.ump.ConsentInformation
+import com.google.android.ump.ConsentRequestParameters
+import com.google.android.ump.UserMessagingPlatform
+// --- End UMP SDK Imports ---
 
 
 class MainActivity : ComponentActivity() {
 
     private val vpnViewModel: VpnViewModel by viewModels()
+    private lateinit var consentInformation: ConsentInformation // UMP SDK
 
     private val requestVpnPermissionLauncher =
         registerForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
             if (result.resultCode == Activity.RESULT_OK) {
                 Log.d("MainActivity", "VPN permission granted by user. Checking notification permission next.")
-                // VPN разрешение получено, теперь проверяем/запрашиваем разрешение на уведомления.
                 checkAndRequestPostNotificationPermissionThenConnect()
             } else {
                 Log.w("MainActivity", "VPN permission denied by user.")
@@ -46,7 +55,6 @@ class MainActivity : ComponentActivity() {
     ) { isGranted: Boolean ->
         if (isGranted) {
             Log.d("MainActivity", "POST_NOTIFICATIONS permission granted by user. Triggering ViewModel's connect logic.")
-            // Разрешение получено, сообщаем ViewModel, чтобы она продолжила/повторила попытку подключения
             vpnViewModel.onConnectDisconnectClicked()
         } else {
             Log.w("MainActivity", "POST_NOTIFICATIONS permission denied by user after request.")
@@ -59,7 +67,52 @@ class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
 
-        // Наблюдение за состоянием из сервиса и обновление ViewModel
+        enableEdgeToEdge(
+            statusBarStyle = SystemBarStyle.auto(
+                Color.TRANSPARENT,
+                Color.TRANSPARENT
+            ) {
+                // Лямбда для определения темного режима (true если темный режим)
+                (resources.configuration.uiMode and Configuration.UI_MODE_NIGHT_MASK) == Configuration.UI_MODE_NIGHT_YES
+            },
+            navigationBarStyle = SystemBarStyle.auto(
+                Color.TRANSPARENT,
+                Color.TRANSPARENT
+            ) {
+                // Лямбда для определения темного режима (true если темный режим)
+                (resources.configuration.uiMode and Configuration.UI_MODE_NIGHT_MASK) == Configuration.UI_MODE_NIGHT_YES
+            }
+        )
+
+        // --- UMP SDK Initialization and Consent Request ---
+        consentInformation = UserMessagingPlatform.getConsentInformation(this)
+
+        val params = ConsentRequestParameters.Builder()
+            .setTagForUnderAgeOfConsent(false)
+            .build()
+
+        consentInformation.requestConsentInfoUpdate(
+            this,
+            params,
+            {
+                Log.d("MainActivity", "UMP: Consent info updated successfully.")
+                UserMessagingPlatform.loadAndShowConsentFormIfRequired(this) { loadAndShowError ->
+                    if (loadAndShowError != null) {
+                        Log.w("MainActivity", "UMP: loadAndShowConsentFormIfRequired failed: ${loadAndShowError.message}")
+                    }
+                    if (consentInformation.canRequestAds()) {
+                        Log.d("MainActivity", "UMP: Consent obtained (canRequestAds is true).")
+                    } else {
+                         Log.d("MainActivity", "UMP: Consent not obtained or not required (canRequestAds is false).")
+                    }
+                }
+            },
+            { requestConsentError ->
+                Log.w("MainActivity", "UMP: requestConsentInfoUpdate failed: ${requestConsentError.message}")
+            }
+        )
+        // --- End UMP SDK ---
+
         MyWgVpnService.tunnelStatus.observe(this) { state ->
             Log.d("MainActivity", "Service tunnelStatus changed to: $state")
             val currentError = MyWgVpnService.vpnError.value
@@ -67,11 +120,8 @@ class MainActivity : ComponentActivity() {
         }
 
         MyWgVpnService.vpnError.observe(this) { errorMessage ->
-            // Реагируем, только если есть новая ошибка, чтобы не перезаписывать состояние без нужды,
-            // если ошибка пришла, а состояние уже DOWN.
             if (errorMessage != null) {
                 Log.d("MainActivity", "Service vpnError observed: $errorMessage")
-                // Получаем самое актуальное состояние, если оно есть, иначе считаем DOWN
                 val currentState = MyWgVpnService.tunnelStatus.value ?: vpnViewModel.vpnState.value ?: Tunnel.State.DOWN
                 vpnViewModel.setExternalVpnState(currentState, errorMessage)
             }
@@ -81,8 +131,6 @@ class MainActivity : ComponentActivity() {
             Log.d("MainActivity", "MyWgVpnService.serviceIsRunning: $isRunning")
             if (!isRunning) {
                 val vmState = vpnViewModel.vpnState.value
-                // Если ViewModel думает, что VPN работает или подключается, а сервис уже не запущен,
-                // то сбрасываем состояние в DOWN.
                 if (vmState == Tunnel.State.UP || vmState == Tunnel.State.TOGGLE) {
                     Log.w("MainActivity", "Service is not running, but ViewModel state is $vmState. Resetting to DOWN.")
                     vpnViewModel.setExternalVpnState(Tunnel.State.DOWN, "VPN service stopped unexpectedly.")
@@ -90,26 +138,20 @@ class MainActivity : ComponentActivity() {
             }
         }
 
-        // --- НАБЛЮДЕНИЕ ЗА СОБЫТИЕМ ЗАПРОСА РАЗРЕШЕНИЙ ОТ VIEWMODEL ---
         vpnViewModel.requestPermissionsEvent.observe(this, EventObserver {
             Log.d("MainActivity", "Received requestPermissionsEvent from ViewModel.")
-            requestVpnAndNotificationPermissionsMain() // Вызываем метод для запроса разрешений
+            requestVpnAndNotificationPermissionsMain()
         })
-        // --- КОНЕЦ НАБЛЮДЕНИЯ ---
 
         setContent {
             VPN_for_friends_v3Theme {
                 Surface(modifier = Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.background) {
-                    MainScreen(viewModel = vpnViewModel) // Используем UI из MainScreen.kt
+                    MainScreen(viewModel = vpnViewModel)
                 }
             }
         }
     }
 
-    /**
-     * Этот метод инициирует процесс запроса необходимых разрешений (VPN, затем Уведомления).
-     * Он вызывается, когда ViewModel сигнализирует о необходимости разрешений.
-     */
     private fun requestVpnAndNotificationPermissionsMain() {
         val vpnIntentPermission = VpnService.prepare(this)
         if (vpnIntentPermission != null) {
@@ -121,11 +163,6 @@ class MainActivity : ComponentActivity() {
         }
     }
 
-    /**
-     * Этот метод проверяет и запрашивает разрешение на POST_NOTIFICATIONS (для Android 13+)
-     * ПОСЛЕ того, как разрешение на VPN уже было предоставлено.
-     * Если все разрешения есть, он "пинает" ViewModel для продолжения.
-     */
     private fun checkAndRequestPostNotificationPermissionThenConnect() {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
             when {
@@ -163,4 +200,3 @@ class MainActivity : ComponentActivity() {
         }
     }
 }
-

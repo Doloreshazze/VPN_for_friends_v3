@@ -12,6 +12,7 @@
     <string name="status_error">Something went wrong.</string>
     <string name="status_established">Connection established.</string>
     <string name="status_connecting">Connecting...</string>
+    <string name="status_preparing_config">Preparing config...</string>
     <string name="vpn_status_format">VPN Status: %1$s</string>
     <string name="button_retry">Retry</string>
     <string name="button_connect">Connect</string>

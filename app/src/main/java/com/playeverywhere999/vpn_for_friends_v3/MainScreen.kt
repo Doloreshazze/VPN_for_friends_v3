@@ -1,6 +1,7 @@
-package com.playeverywhere999.vpn_for_friends_v3 // или com.playeverywhere999.vpn_for_friends_v3.ui
+package com.playeverywhere999.vpn_for_friends_v3
 
 import android.util.Log
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.CircleShape
@@ -8,73 +9,71 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.livedata.observeAsState
+import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
-import com.wireguard.android.backend.Tunnel // Используем Tunnel.State
-// и вашу тему
-// import com.playeverywhere999.vpn_for_friends_v3.ui.theme.VPN_for_friends_v3Theme
-
-// Helper function to determine if a configuration/connection process is active
-private fun isConfigInProgress(configStatus: String?): Boolean {
-    return configStatus?.contains("Generating", ignoreCase = true) == true ||
-           configStatus?.contains("Contacting server", ignoreCase = true) == true ||
-           configStatus?.contains("Retrying config fetch", ignoreCase = true) == true ||
-           configStatus?.contains("Connection failed, VPN service is retrying...", ignoreCase = true) == true ||
-           configStatus?.contains("Preparing tunnel", ignoreCase = true) == true ||
-           configStatus?.contains("Configuration ready", ignoreCase = true) == true ||
-           configStatus?.contains("Processing...", ignoreCase = true) == true
-}
+import com.wireguard.android.backend.Tunnel
 
 @Composable
 private fun ConnectionStatusIndicator(
-    vpnState: Tunnel.State, 
-    isEnabled: Boolean, 
-    size: Dp = 20.dp, 
-    modifier: Modifier = Modifier // Allow passing custom modifiers, e.g., for alignment
+    vpnState: Tunnel.State,
+    isEnabled: Boolean, // isEnabled here refers to the button's enabled state
+    size: Dp = 20.dp,
+    modifier: Modifier = Modifier
 ) {
     val indicatorColor = if (!isEnabled) {
-        Color.Gray
+        if (vpnState == Tunnel.State.TOGGLE) Color.Yellow else Color.Gray
     } else {
         when (vpnState) {
             Tunnel.State.UP -> Color.Green
-            Tunnel.State.DOWN -> Color.Red 
+            Tunnel.State.DOWN -> Color.Red
+            Tunnel.State.TOGGLE -> Color.Yellow 
             else -> Color.Gray 
         }
     }
-
     Box(
-        modifier = modifier // Apply passed modifier here
-            .size(size) 
+        modifier = modifier
+            .size(size)
             .background(indicatorColor, CircleShape)
     )
 }
 
 @Composable
 private fun StatusMessageDisplay(
-    vpnState: Tunnel.State,
     lastError: String?,
-    configStatus: String?
+    configStatusMessage: String? // Pass the full configStatusMessage
 ) {
     val message: String?
     val color: Color
-    val configInProgress = isConfigInProgress(configStatus)
+
+    val preparingConfigStr = stringResource(R.string.status_preparing_config)
+    val connectingStr = stringResource(R.string.status_connecting)
+    val processingStr = stringResource(R.string.status_processing)
+    
+    val currentStatus = configStatusMessage // Local capture for stable smart cast
 
     when {
         !lastError.isNullOrEmpty() -> {
-            message = stringResource(id = R.string.status_error)
+            message = lastError 
             color = MaterialTheme.colorScheme.error
         }
-        vpnState == Tunnel.State.UP -> {
-            message = null 
-            color = LocalContentColor.current
-        }
-        vpnState == Tunnel.State.TOGGLE || (vpnState == Tunnel.State.DOWN && configInProgress && lastError.isNullOrEmpty()) -> {
-            message = stringResource(id = R.string.status_connecting) 
+        // Avoid showing messages that are now on the button itself
+        currentStatus == preparingConfigStr || 
+        currentStatus == connectingStr || 
+        currentStatus == processingStr ||
+        currentStatus?.contains("Generating client keys...", ignoreCase = true) == true ||
+        currentStatus?.contains("Client keys generated. Contacting server...", ignoreCase = true) == true ||
+        currentStatus?.contains("Retrying config fetch", ignoreCase = true) == true ||
+        currentStatus?.contains("Configuration received. Preparing tunnel...", ignoreCase = true) == true -> {
+            message = null
             color = LocalContentColor.current
         }
         else -> {
@@ -93,6 +92,7 @@ private fun StatusMessageDisplay(
     }
 }
 
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
 fun MainScreen(
     viewModel: VpnViewModel,
@@ -100,179 +100,244 @@ fun MainScreen(
 ) {
     val currentVpnState by viewModel.vpnState.observeAsState(Tunnel.State.DOWN)
     val lastErrorMessage by viewModel.lastErrorMessage.observeAsState()
-    val configStatusMessage by viewModel.configStatusMessage.observeAsState()
+    val configStatusMessage by viewModel.configStatusMessage.observeAsState() // Type will be String?
 
-    val configCurrentlyInProgress = isConfigInProgress(configStatusMessage)
+    // Define strings needed for logic based on configStatusMessage
+    val preparingConfigStr = stringResource(R.string.status_preparing_config)
+    val processingStr = stringResource(R.string.status_processing) 
+    val connectingStr = stringResource(R.string.status_connecting) 
+
+    val configCurrentlyInProgress = remember(configStatusMessage, preparingConfigStr, processingStr) {
+        val currentStatus = configStatusMessage // Local variable for stable smart cast
+        currentStatus != null && (
+            currentStatus.equals(preparingConfigStr, ignoreCase = true) ||
+            currentStatus.contains("Generating client keys...", ignoreCase = true) || 
+            currentStatus.contains("Client keys generated. Contacting server...", ignoreCase = true) || 
+            currentStatus.contains("Retrying config fetch", ignoreCase = true) || 
+            currentStatus.contains("Connection failed, VPN service is retrying...", ignoreCase = true) ||
+            currentStatus.contains("Configuration received. Preparing tunnel...", ignoreCase = true) ||
+            currentStatus.equals(processingStr, ignoreCase = true) 
+        )
+    }
 
     val isButtonEnabled = !(
         (currentVpnState == Tunnel.State.TOGGLE && lastErrorMessage.isNullOrEmpty()) ||
         (currentVpnState == Tunnel.State.DOWN && lastErrorMessage.isNullOrEmpty() && configCurrentlyInProgress)
     )
 
-    Surface(modifier = modifier.fillMaxSize(), color = MaterialTheme.colorScheme.background) {
-        Column(
+    MainScreenUI(
+        modifier = modifier,
+        currentVpnState = currentVpnState,
+        lastErrorMessage = lastErrorMessage,
+        configStatusMessage = configStatusMessage, // Pass the String? value
+        isButtonEnabled = isButtonEnabled,
+        preparingConfigStr = preparingConfigStr,
+        connectingStr = connectingStr,
+        onConnectDisconnectClicked = {
+            Log.d("MainScreen", "Connect/Disconnect button clicked. Current state: ${currentVpnState.name}, Enabled: $isButtonEnabled, ConfigStatus: $configStatusMessage, Error: $lastErrorMessage")
+            if (isButtonEnabled) {
+                viewModel.onConnectDisconnectClicked()
+            }
+        }
+    )
+}
+
+@OptIn(ExperimentalLayoutApi::class)
+@Composable
+private fun MainScreenUI(
+    modifier: Modifier = Modifier,
+    currentVpnState: Tunnel.State,
+    lastErrorMessage: String?,
+    configStatusMessage: String?, // Expects String?
+    isButtonEnabled: Boolean,
+    preparingConfigStr: String, 
+    connectingStr: String, 
+    onConnectDisconnectClicked: () -> Unit
+) {
+    Box(modifier = modifier.fillMaxSize()) {
+        Image(
+            painter = painterResource(id = R.drawable.background),
+            contentDescription = null,
+            modifier = Modifier.fillMaxSize(),
+            contentScale = ContentScale.Crop
+        )
+        Image(
+            painter = painterResource(id = R.drawable.shield),
+            contentDescription = "Shield Icon",
+            modifier = Modifier
+                .align(Alignment.Center)
+                .fillMaxSize(),
+            contentScale = ContentScale.Fit
+        )
+
+        Surface(
             modifier = Modifier
                 .fillMaxSize()
-                .padding(16.dp),
-            horizontalAlignment = Alignment.CenterHorizontally,
-            verticalArrangement = Arrangement.Center
+                .windowInsetsPadding(WindowInsets.safeDrawing),
+            color = Color.Transparent
         ) {
-            StatusMessageDisplay(
-                vpnState = currentVpnState,
-                lastError = lastErrorMessage,
-                configStatus = configStatusMessage
-            )
-            
-            val showStatusMessage = lastErrorMessage != null || 
-                                   (currentVpnState == Tunnel.State.TOGGLE && lastErrorMessage == null) ||
-                                   (currentVpnState == Tunnel.State.DOWN && configCurrentlyInProgress && lastErrorMessage == null)
-            if (showStatusMessage) {
-                 Spacer(modifier = Modifier.height(16.dp))
-            } else {
-                 Spacer(modifier = Modifier.height(48.dp)) 
-            }
-
-            Button(
-                onClick = {
-                    Log.d("MainScreen", "Connect/Disconnect button clicked. Current state: ${currentVpnState.name}, Enabled: $isButtonEnabled")
-                    if (isButtonEnabled) { 
-                        viewModel.onConnectDisconnectClicked()
-                    }
-                },
-                modifier = Modifier.fillMaxWidth(0.8f),
-                enabled = isButtonEnabled,
-                contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp) 
+            Column(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .padding(16.dp),
+                horizontalAlignment = Alignment.CenterHorizontally,
+                verticalArrangement = Arrangement.Center
             ) {
                 Box(
-                    modifier = Modifier.fillMaxWidth(),
-                    // contentAlignment = Alignment.Center // Default for Box, children can override
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(60.dp),
+                    contentAlignment = Alignment.BottomCenter
                 ) {
-                    val textToShow:
-                    @Composable
-                    () -> Unit
-                    val indicatorToShow:
-                    @Composable
-                    ((Modifier) -> Unit)? // Takes a Modifier for alignment
+                    StatusMessageDisplay(
+                        lastError = lastErrorMessage,
+                        configStatusMessage = configStatusMessage // Pass the String? value
+                    )
+                }
 
-                    if (lastErrorMessage != null) {
-                        textToShow = { Text(stringResource(id = R.string.button_retry)) }
-                        indicatorToShow = { modifier -> ConnectionStatusIndicator(vpnState = Tunnel.State.DOWN, isEnabled = isButtonEnabled, modifier = modifier) }
-                    } else if (currentVpnState == Tunnel.State.UP) {
-                        textToShow = { Text(stringResource(id = R.string.button_disconnect)) }
-                        indicatorToShow = { modifier -> ConnectionStatusIndicator(vpnState = Tunnel.State.UP, isEnabled = isButtonEnabled, modifier = modifier) }
-                    } else {
-                        textToShow = { Text(stringResource(id = R.string.button_connect)) }
-                        indicatorToShow = { modifier -> ConnectionStatusIndicator(vpnState = Tunnel.State.DOWN, isEnabled = isButtonEnabled, modifier = modifier) }
-                    }
+                Button(
+                    onClick = onConnectDisconnectClicked,
+                    modifier = Modifier.fillMaxWidth(0.8f), // Standard height
+                    enabled = isButtonEnabled,
+                    contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp),
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = Color(0xFFBBBBBB),      // Medium gray for enabled background
+                        contentColor = Color.Black,                // Black for enabled content (text)
+                        disabledContainerColor = Color(0xFF888888), // Darker gray for disabled background
+                        disabledContentColor = Color(0xFFBBBBBB)     // Medium gray for disabled content (text)
+                    )
+                ) {
+                    Box(
+                        modifier = Modifier.fillMaxWidth(),
+                    ) {
+                        val textToShow: @Composable () -> Unit
+                        val visualVpnStateForIndicator: Tunnel.State
 
-                    // Text centered in the Box
-                    Box(modifier = Modifier.align(Alignment.Center)) {
-                        textToShow()
+                        val isConnectingDisplayState = !isButtonEnabled && lastErrorMessage.isNullOrEmpty()
+                        val currentStatus = configStatusMessage // Local capture for stable smart cast
+
+                        if (isConnectingDisplayState) {
+                            if (currentStatus == preparingConfigStr) { // Use local capture
+                                textToShow = { Text(preparingConfigStr) } 
+                            } else {
+                                textToShow = { Text(connectingStr) } 
+                            }
+                            visualVpnStateForIndicator = Tunnel.State.TOGGLE 
+                        } else if (lastErrorMessage != null) {
+                            textToShow = { Text(stringResource(id = R.string.button_retry)) }
+                            visualVpnStateForIndicator = Tunnel.State.DOWN 
+                        } else if (currentVpnState == Tunnel.State.UP) {
+                            textToShow = { Text(stringResource(id = R.string.button_disconnect)) }
+                            visualVpnStateForIndicator = Tunnel.State.UP 
+                        } else {
+                            textToShow = { Text(stringResource(id = R.string.button_connect)) }
+                            visualVpnStateForIndicator = Tunnel.State.DOWN 
+                        }
+
+                        Box(modifier = Modifier.align(Alignment.Center)) {
+                            textToShow()
+                        }
+                        ConnectionStatusIndicator(
+                            vpnState = visualVpnStateForIndicator,
+                            isEnabled = isButtonEnabled,
+                            modifier = Modifier.align(Alignment.CenterEnd)
+                        )
                     }
-                    // Indicator aligned to the end of the Box
-                    indicatorToShow?.invoke(Modifier.align(Alignment.CenterEnd))
                 }
             }
         }
     }
 }
 
+// --- Preview Functions Updated --- 
+
+@OptIn(ExperimentalLayoutApi::class)
 @Preview(showBackground = true, name = "MainScreen DOWN (Idle)")
 @Composable
 fun MainScreenPreviewDownIdle() {
     MaterialTheme {
-        Column(
-            modifier = Modifier.fillMaxSize().padding(16.dp),
-            verticalArrangement = Arrangement.Center, horizontalAlignment = Alignment.CenterHorizontally
-        ) {
-            StatusMessageDisplay(vpnState = Tunnel.State.DOWN, lastError = null, configStatus = null)
-            Spacer(modifier = Modifier.height(48.dp))
-            Button(onClick = {}, enabled = true, contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp)) {
-                Box(modifier = Modifier.fillMaxWidth()) {
-                    Box(modifier = Modifier.align(Alignment.Center)) { Text(stringResource(R.string.button_connect)) }
-                    ConnectionStatusIndicator(vpnState = Tunnel.State.DOWN, isEnabled = true, modifier = Modifier.align(Alignment.CenterEnd))
-                }
-            }
-        }
+        val context = LocalContext.current
+        MainScreenUI(
+            currentVpnState = Tunnel.State.DOWN,
+            lastErrorMessage = null,
+            configStatusMessage = null,
+            isButtonEnabled = true,
+            preparingConfigStr = context.getString(R.string.status_preparing_config),
+            connectingStr = context.getString(R.string.status_connecting),
+            onConnectDisconnectClicked = {}
+        )
     }
 }
 
+@OptIn(ExperimentalLayoutApi::class)
 @Preview(showBackground = true, name = "MainScreen UP")
 @Composable
 fun MainScreenPreviewUp() {
     MaterialTheme {
-        Column(
-            modifier = Modifier.fillMaxSize().padding(16.dp),
-            verticalArrangement = Arrangement.Center, horizontalAlignment = Alignment.CenterHorizontally
-        ) {
-            StatusMessageDisplay(vpnState = Tunnel.State.UP, lastError = null, configStatus = null) 
-            Spacer(modifier = Modifier.height(48.dp)) 
-            Button(onClick = {}, enabled = true, contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp)) {
-                 Box(modifier = Modifier.fillMaxWidth()) {
-                    Box(modifier = Modifier.align(Alignment.Center)) { Text(stringResource(R.string.button_disconnect)) }
-                    ConnectionStatusIndicator(vpnState = Tunnel.State.UP, isEnabled = true, modifier = Modifier.align(Alignment.CenterEnd))
-                }
-            }
-        }
+        val context = LocalContext.current
+        MainScreenUI(
+            currentVpnState = Tunnel.State.UP,
+            lastErrorMessage = null,
+            configStatusMessage = "VPN Connected", // Example status
+            isButtonEnabled = true,
+            preparingConfigStr = context.getString(R.string.status_preparing_config),
+            connectingStr = context.getString(R.string.status_connecting),
+            onConnectDisconnectClicked = {}
+        )
     }
 }
 
-@Preview(showBackground = true, name = "MainScreen TOGGLE (Connecting)")
+@OptIn(ExperimentalLayoutApi::class)
+@Preview(showBackground = true, name = "MainScreen TOGGLE (Connecting via Processing)")
 @Composable
-fun MainScreenPreviewToggleConnecting() {
+fun MainScreenPreviewToggleConnectingProcessing() {
     MaterialTheme {
-        Column(
-            modifier = Modifier.fillMaxSize().padding(16.dp),
-            verticalArrangement = Arrangement.Center, horizontalAlignment = Alignment.CenterHorizontally
-        ) {
-            StatusMessageDisplay(vpnState = Tunnel.State.TOGGLE, lastError = null, configStatus = "Contacting server...")
-            Spacer(modifier = Modifier.height(16.dp))
-            Button(onClick = {}, enabled = false, contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp)) { 
-                 Box(modifier = Modifier.fillMaxWidth()) {
-                    Box(modifier = Modifier.align(Alignment.Center)) { Text(stringResource(R.string.button_connect)) }
-                    ConnectionStatusIndicator(vpnState = Tunnel.State.DOWN, isEnabled = false, modifier = Modifier.align(Alignment.CenterEnd))
-                }
-            }
-        }
+        val context = LocalContext.current
+        MainScreenUI(
+            currentVpnState = Tunnel.State.TOGGLE, 
+            lastErrorMessage = null,
+            configStatusMessage = context.getString(R.string.status_processing), 
+            isButtonEnabled = false, 
+            preparingConfigStr = context.getString(R.string.status_preparing_config),
+            connectingStr = context.getString(R.string.status_connecting),
+            onConnectDisconnectClicked = {}
+        )
     }
 }
 
+@OptIn(ExperimentalLayoutApi::class)
+@Preview(showBackground = true, name = "MainScreen DOWN (Preparing Config)")
+@Composable
+fun MainScreenPreviewDownPreparingConfig() {
+    MaterialTheme {
+        val context = LocalContext.current
+        MainScreenUI(
+            currentVpnState = Tunnel.State.DOWN,
+            lastErrorMessage = null,
+            configStatusMessage = context.getString(R.string.status_preparing_config), 
+            isButtonEnabled = false, 
+            preparingConfigStr = context.getString(R.string.status_preparing_config),
+            connectingStr = context.getString(R.string.status_connecting),
+            onConnectDisconnectClicked = {}
+        )
+    }
+}
+
+@OptIn(ExperimentalLayoutApi::class)
 @Preview(showBackground = true, name = "MainScreen DOWN with Error")
 @Composable
 fun MainScreenPreviewDownWithError() {
     MaterialTheme {
-        Column(
-            modifier = Modifier.fillMaxSize().padding(16.dp),
-            verticalArrangement = Arrangement.Center, horizontalAlignment = Alignment.CenterHorizontally
-        ) {
-            StatusMessageDisplay(vpnState = Tunnel.State.DOWN, lastError = "Sample Error", configStatus = "Error: Something bad")
-            Spacer(modifier = Modifier.height(16.dp))
-            Button(onClick = {}, enabled = true, contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp)) { 
-                Box(modifier = Modifier.fillMaxWidth()) {
-                    Box(modifier = Modifier.align(Alignment.Center)) { Text(stringResource(R.string.button_retry)) }
-                    ConnectionStatusIndicator(vpnState = Tunnel.State.DOWN, isEnabled = true, modifier = Modifier.align(Alignment.CenterEnd))
-                }
-            }
-        }
+        val context = LocalContext.current
+        MainScreenUI(
+            currentVpnState = Tunnel.State.DOWN,
+            lastErrorMessage = "Sample Detailed Error Message",
+            configStatusMessage = "Error: Config fetch failed",
+            isButtonEnabled = true, 
+            preparingConfigStr = context.getString(R.string.status_preparing_config),
+            connectingStr = context.getString(R.string.status_connecting),
+            onConnectDisconnectClicked = {}
+        )
     }
 }
 
-@Preview(showBackground = true, name = "MainScreen DOWN (Config In Progress)")
-@Composable
-fun MainScreenPreviewDownConfigInProgress() {
-    MaterialTheme {
-        Column(
-            modifier = Modifier.fillMaxSize().padding(16.dp),
-            verticalArrangement = Arrangement.Center, horizontalAlignment = Alignment.CenterHorizontally
-        ) {
-            StatusMessageDisplay(vpnState = Tunnel.State.DOWN, lastError = null, configStatus = "Generating keypair...")
-            Spacer(modifier = Modifier.height(16.dp))
-            Button(onClick = {}, enabled = false, contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp)) { 
-                Box(modifier = Modifier.fillMaxWidth()) {
-                    Box(modifier = Modifier.align(Alignment.Center)) { Text(stringResource(R.string.button_connect)) }
-                    ConnectionStatusIndicator(vpnState = Tunnel.State.DOWN, isEnabled = false, modifier = Modifier.align(Alignment.CenterEnd))
-                }
-            }
-        }
-    }
-}
