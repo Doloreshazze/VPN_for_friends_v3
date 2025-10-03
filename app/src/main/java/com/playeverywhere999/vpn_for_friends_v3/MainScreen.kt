@@ -3,7 +3,9 @@ package com.playeverywhere999.vpn_for_friends_v3
 import android.util.Log
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
-import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.layout.* // Keep existing wildcard
+import androidx.compose.foundation.layout.WindowInsets // Added explicit import
+import androidx.compose.foundation.layout.WindowInsetsSides // Added explicit import
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material3.*
 import androidx.compose.runtime.Composable
@@ -26,7 +28,7 @@ import com.wireguard.android.backend.Tunnel
 private fun ConnectionStatusIndicator(
     vpnState: Tunnel.State,
     isEnabled: Boolean, // isEnabled here refers to the button's enabled state
-    size: Dp = 20.dp,
+    size: Dp = 20.dp, // Default size, will be overridden in MainScreenUI
     modifier: Modifier = Modifier
 ) {
     val indicatorColor = if (!isEnabled) {
@@ -51,7 +53,7 @@ private fun StatusMessageDisplay(
     lastError: String?,
     configStatusMessage: String? // Pass the full configStatusMessage
 ) {
-    val message: String?
+    var message: String? // Changed to var to allow modification
     val color: Color
 
     val preparingConfigStr = stringResource(R.string.status_preparing_config)
@@ -60,12 +62,18 @@ private fun StatusMessageDisplay(
     
     val currentStatus = configStatusMessage // Local capture for stable smart cast
 
+    // Define the specific error message to check against
+    val specificApiError = "Failed to get server config from API"
+
     when {
         !lastError.isNullOrEmpty() -> {
-            message = lastError 
+            message = if (lastError.contains(specificApiError, ignoreCase = true)) { // More robust check
+                stringResource(id = R.string.error_something_went_wrong)
+            } else {
+                lastError 
+            }
             color = MaterialTheme.colorScheme.error
         }
-        // Avoid showing messages that are now on the button itself
         currentStatus == preparingConfigStr || 
         currentStatus == connectingStr || 
         currentStatus == processingStr ||
@@ -100,15 +108,14 @@ fun MainScreen(
 ) {
     val currentVpnState by viewModel.vpnState.observeAsState(Tunnel.State.DOWN)
     val lastErrorMessage by viewModel.lastErrorMessage.observeAsState()
-    val configStatusMessage by viewModel.configStatusMessage.observeAsState() // Type will be String?
+    val configStatusMessage by viewModel.configStatusMessage.observeAsState() 
 
-    // Define strings needed for logic based on configStatusMessage
     val preparingConfigStr = stringResource(R.string.status_preparing_config)
     val processingStr = stringResource(R.string.status_processing) 
     val connectingStr = stringResource(R.string.status_connecting) 
 
     val configCurrentlyInProgress = remember(configStatusMessage, preparingConfigStr, processingStr) {
-        val currentStatus = configStatusMessage // Local variable for stable smart cast
+        val currentStatus = configStatusMessage 
         currentStatus != null && (
             currentStatus.equals(preparingConfigStr, ignoreCase = true) ||
             currentStatus.contains("Generating client keys...", ignoreCase = true) || 
@@ -129,7 +136,7 @@ fun MainScreen(
         modifier = modifier,
         currentVpnState = currentVpnState,
         lastErrorMessage = lastErrorMessage,
-        configStatusMessage = configStatusMessage, // Pass the String? value
+        configStatusMessage = configStatusMessage, 
         isButtonEnabled = isButtonEnabled,
         preparingConfigStr = preparingConfigStr,
         connectingStr = connectingStr,
@@ -148,7 +155,7 @@ private fun MainScreenUI(
     modifier: Modifier = Modifier,
     currentVpnState: Tunnel.State,
     lastErrorMessage: String?,
-    configStatusMessage: String?, // Expects String?
+    configStatusMessage: String?,
     isButtonEnabled: Boolean,
     preparingConfigStr: String, 
     connectingStr: String, 
@@ -171,14 +178,18 @@ private fun MainScreenUI(
         )
 
         Surface(
-            modifier = Modifier
-                .fillMaxSize()
-                .windowInsetsPadding(WindowInsets.safeDrawing),
+            modifier = Modifier.fillMaxSize(), // Removed .windowInsetsPadding(WindowInsets.safeDrawing)
             color = Color.Transparent
         ) {
             Column(
                 modifier = Modifier
                     .fillMaxSize()
+                    .let {
+                        val topInsets = WindowInsets.systemBars.only(WindowInsetsSides.Top)
+                        val horizontalInsets = WindowInsets.systemBars.only(WindowInsetsSides.Horizontal)
+                        val combinedInsets = topInsets.union(horizontalInsets)
+                        it.windowInsetsPadding(combinedInsets)
+                    }
                     .padding(16.dp),
                 horizontalAlignment = Alignment.CenterHorizontally,
                 verticalArrangement = Arrangement.Center
@@ -191,20 +202,22 @@ private fun MainScreenUI(
                 ) {
                     StatusMessageDisplay(
                         lastError = lastErrorMessage,
-                        configStatusMessage = configStatusMessage // Pass the String? value
+                        configStatusMessage = configStatusMessage
                     )
                 }
 
                 Button(
                     onClick = onConnectDisconnectClicked,
-                    modifier = Modifier.fillMaxWidth(0.8f), // Standard height
+                    modifier = Modifier
+                        .fillMaxWidth(0.8f)
+                        .height(80.dp), 
                     enabled = isButtonEnabled,
                     contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp),
                     colors = ButtonDefaults.buttonColors(
-                        containerColor = Color(0xFFBBBBBB),      // Medium gray for enabled background
-                        contentColor = Color.Black,                // Black for enabled content (text)
-                        disabledContainerColor = Color(0xFF888888), // Darker gray for disabled background
-                        disabledContentColor = Color(0xFFBBBBBB)     // Medium gray for disabled content (text)
+                        containerColor = Color(0xFFBBBBBB),      
+                        contentColor = Color.Black,                
+                        disabledContainerColor = Color(0xFF888888), 
+                        disabledContentColor = Color(0xFFBBBBBB)     
                     )
                 ) {
                     Box(
@@ -212,25 +225,26 @@ private fun MainScreenUI(
                     ) {
                         val textToShow: @Composable () -> Unit
                         val visualVpnStateForIndicator: Tunnel.State
+                        val buttonTextStyle = MaterialTheme.typography.titleLarge
 
                         val isConnectingDisplayState = !isButtonEnabled && lastErrorMessage.isNullOrEmpty()
-                        val currentStatus = configStatusMessage // Local capture for stable smart cast
+                        val currentStatus = configStatusMessage 
 
                         if (isConnectingDisplayState) {
-                            if (currentStatus == preparingConfigStr) { // Use local capture
-                                textToShow = { Text(preparingConfigStr) } 
+                            if (currentStatus == preparingConfigStr) { 
+                                textToShow = { Text(preparingConfigStr, style = buttonTextStyle) } 
                             } else {
-                                textToShow = { Text(connectingStr) } 
+                                textToShow = { Text(connectingStr, style = buttonTextStyle) } 
                             }
                             visualVpnStateForIndicator = Tunnel.State.TOGGLE 
                         } else if (lastErrorMessage != null) {
-                            textToShow = { Text(stringResource(id = R.string.button_retry)) }
+                            textToShow = { Text(stringResource(id = R.string.button_retry), style = buttonTextStyle) }
                             visualVpnStateForIndicator = Tunnel.State.DOWN 
                         } else if (currentVpnState == Tunnel.State.UP) {
-                            textToShow = { Text(stringResource(id = R.string.button_disconnect)) }
+                            textToShow = { Text(stringResource(id = R.string.button_disconnect), style = buttonTextStyle) }
                             visualVpnStateForIndicator = Tunnel.State.UP 
                         } else {
-                            textToShow = { Text(stringResource(id = R.string.button_connect)) }
+                            textToShow = { Text(stringResource(id = R.string.button_connect), style = buttonTextStyle) }
                             visualVpnStateForIndicator = Tunnel.State.DOWN 
                         }
 
@@ -240,6 +254,7 @@ private fun MainScreenUI(
                         ConnectionStatusIndicator(
                             vpnState = visualVpnStateForIndicator,
                             isEnabled = isButtonEnabled,
+                            size = 28.dp, 
                             modifier = Modifier.align(Alignment.CenterEnd)
                         )
                     }
@@ -278,7 +293,7 @@ fun MainScreenPreviewUp() {
         MainScreenUI(
             currentVpnState = Tunnel.State.UP,
             lastErrorMessage = null,
-            configStatusMessage = "VPN Connected", // Example status
+            configStatusMessage = "VPN Connected", 
             isButtonEnabled = true,
             preparingConfigStr = context.getString(R.string.status_preparing_config),
             connectingStr = context.getString(R.string.status_connecting),

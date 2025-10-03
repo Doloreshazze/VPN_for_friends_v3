@@ -19,5 +19,6 @@
     <string name="button_disconnect">Disconnect</string>
     <string name="status_processing">Processing...</string> <!-- Kept in case it's used elsewhere, though MainScreen now uses status_connecting for this button state -->
     <string name="content_desc_loading">Loading indicator</string>
+    <string name="error_something_went_wrong">Something went wrong</string>
 
 </resources>

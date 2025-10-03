@@ -8,4 +8,5 @@
     <string name="button_disconnect">断开连接</string>
     <string name="status_processing">处理中...</string>
     <string name="content_desc_loading">加载指示器</string>
+    <string name="error_something_went_wrong">出了一些问题</string>
 </resources>

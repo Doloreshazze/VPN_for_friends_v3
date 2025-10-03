@@ -8,4 +8,5 @@
     <string name="button_disconnect">Trennen</string>
     <string name="status_processing">Verarbeite...</string>
     <string name="content_desc_loading">Ladeanzeige</string>
+    <string name="error_something_went_wrong">Etwas ist schiefgelaufen</string>
 </resources>
