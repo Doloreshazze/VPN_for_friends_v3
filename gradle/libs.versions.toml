@@ -12,7 +12,7 @@ composeBom = "2025.09.01"
 appcompat = "1.7.1"
 
 # Compose
-composeRuntimeLivedata = "1.7.4"
+composeRuntimeLivedata = "1.9.2"
 
 # Тестирование
 junit = "4.13.2"
