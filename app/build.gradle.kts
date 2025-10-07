@@ -12,22 +12,21 @@ plugins {
     alias(libs.plugins.android.application)
     alias(libs.plugins.kotlin.android)
     alias(libs.plugins.kotlin.compose)
-    id("org.jetbrains.kotlin.plugin.serialization") version "2.2.10" // Обновлено до последней версии
+    alias(libs.plugins.kotlin.serialization)
 }
 
 android {
     namespace = "com.playeverywhere999.vpn_for_friends_v3"
-    compileSdk = 35
+    compileSdk = 36
 
     defaultConfig {
         applicationId = "com.playeverywhere999.vpn_for_friends_v3"
         minSdk = 24
-        targetSdk = 35
-        versionCode = 1
-        versionName = "1.0"
+        targetSdk = 36
+        versionCode = 3
+        versionName = "3.0"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
-
         // Делаем API_SECRET_TOKEN доступным в BuildConfig
         // getStringProperty попытается прочитать значение. Если его нет, будет использовано значение по умолчанию "DEFAULT_TOKEN_PLACEHOLDER"
         // Важно: Если токен не будет найден в local.properties, И вы не предоставите значение по умолчанию здесь,
@@ -38,7 +37,6 @@ android {
             "MISSING_TOKEN_CHECK_LOCAL_PROPERTIES" // Это значение попадет в BuildConfig, если токен не найден
         }
         buildConfigField("String", "API_SECRET_TOKEN", "\"$apiSecretToken\"")
-
     }
 
     buildTypes {
@@ -61,27 +59,29 @@ android {
         isCoreLibraryDesugaringEnabled = true
     }
 
-    kotlinOptions {
-        jvmTarget = "17"
+    // ИЗМЕНЕНИЕ: kotlinOptions теперь не нужен, так как jvmTarget можно указать здесь
+    kotlin {
+        jvmToolchain(17)
     }
 
     buildFeatures {
         compose = true
-        buildConfig = true
+        buildConfig = true // Эта опция включает генерацию BuildConfig
     }
 }
 
 dependencies {
-    val ktorVersion = "3.2.3" // Последняя стабильная версия
-    implementation("io.ktor:ktor-client-android:$ktorVersion")
-    implementation("io.ktor:ktor-client-core:$ktorVersion")
-    implementation("io.ktor:ktor-client-content-negotiation:$ktorVersion")
-    implementation("io.ktor:ktor-serialization-kotlinx-json:$ktorVersion")
-    implementation("org.jetbrains.kotlinx:kotlinx-serialization-json:1.9.0") // Последняя версия
-    implementation("io.ktor:ktor-client-logging:$ktorVersion")
-    implementation("androidx.compose.runtime:runtime-livedata:1.7.4") // Обновлено
-    implementation("com.google.android.ump:user-messaging-platform:2.2.0") // Или более новая версия, если доступна
-    implementation("com.wireguard.android:tunnel:1.0.20230706")
+    // Этот блок уже идеален, оставляем его без изменений
+    implementation(libs.ktor.client.android)
+    implementation(libs.ktor.client.core)
+    implementation(libs.ktor.client.content.negotiation)
+    implementation(libs.ktor.serialization.kotlinx.json)
+    implementation(libs.ktor.client.logging)
+    implementation(libs.kotlinx.serialization.json)
+
+    implementation(libs.google.ump)
+
+    implementation(libs.wireguard.tunnel)
 
     implementation(libs.androidx.lifecycle.viewmodel.ktx)
     implementation(libs.androidx.lifecycle.viewmodel.compose)
@@ -96,6 +96,8 @@ dependencies {
     implementation(libs.androidx.material3)
     implementation(libs.androidx.activity.compose)
     implementation(libs.androidx.appcompat)
+    implementation(libs.androidx.compose.runtime.livedata)
+
     coreLibraryDesugaring(libs.android.desugarJdkLibs)
 
     testImplementation(libs.junit)
