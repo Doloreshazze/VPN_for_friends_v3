@@ -2,6 +2,8 @@ package com.playeverywhere999.vpn_for_friends_v3
 
 import android.Manifest
 import android.app.Application
+import android.content.ClipboardManager
+import android.content.Context
 import android.content.pm.PackageManager
 import android.net.VpnService
 import android.os.Build
@@ -11,18 +13,8 @@ import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.LiveData
 import androidx.lifecycle.MutableLiveData
 import androidx.lifecycle.viewModelScope
-import com.playeverywhere999.vpn_for_friends_v3.util.Event
 import com.playeverywhere999.vpn_for_friends_v3.BuildConfig
-import com.wireguard.android.backend.Tunnel
-import com.wireguard.config.BadConfigException
-import com.wireguard.config.Config
-import com.wireguard.config.InetEndpoint
-import com.wireguard.config.InetNetwork
-import com.wireguard.config.Interface
-import com.wireguard.config.Peer
-import com.wireguard.crypto.Key
-import com.wireguard.crypto.KeyFormatException
-import com.wireguard.crypto.KeyPair
+import com.playeverywhere999.vpn_for_friends_v3.util.Event
 import io.ktor.client.HttpClient
 import io.ktor.client.call.body
 import io.ktor.client.plugins.contentnegotiation.ContentNegotiation
@@ -39,22 +31,25 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.add
+import kotlinx.serialization.json.buildJsonArray
+import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.put
+import kotlinx.serialization.json.putJsonArray
+import kotlinx.serialization.json.putJsonObject
 import java.net.InetAddress
+import java.net.URI
 
 @Serializable
-data class ServerConfigData(
-    val clientAssignedAddress: String,
-    val serverPublicKey: String,
-    val serverEndpoint: String,
-    val dnsServers: List<String>,
-    val allowedIps: List<String>,
-    val persistentKeepalive: Int? = null,
+data class VlessConfig(
+    val vlessUrl: String
 )
 
 class VpnViewModel(application: Application) : AndroidViewModel(application) {
 
-    private val _vpnState = MutableLiveData<Tunnel.State>(Tunnel.State.DOWN)
-    val vpnState: LiveData<Tunnel.State> = _vpnState
+    private val _vpnState = MutableLiveData<VpnTunnelState>(VpnTunnelState.DOWN)
+    val vpnState: LiveData<VpnTunnelState> = _vpnState
 
     private val _requestPermissionsEvent = MutableLiveData<Event<Unit>>()
     val requestPermissionsEvent: LiveData<Event<Unit>> = _requestPermissionsEvent
@@ -62,15 +57,14 @@ class VpnViewModel(application: Application) : AndroidViewModel(application) {
     private val _lastErrorMessage = MutableLiveData<String?>()
     val lastErrorMessage: LiveData<String?> = _lastErrorMessage
 
-    private val _preparedConfig = MutableLiveData<Config?>()
-    val preparedConfig: LiveData<Config?> = _preparedConfig
+    private val _preparedConfig = MutableLiveData<String?>()
+    val preparedConfig: LiveData<String?> = _preparedConfig
 
     private val _configStatusMessage = MutableLiveData<String?>()
     val configStatusMessage: LiveData<String?> = _configStatusMessage
 
     private val _isConnectingAfterConfigFetch = MutableLiveData<Boolean>(false)
 
-    private var clientKeyPair: KeyPair? = null
     private var configFetchRetryCount = 0
 
     companion object {
@@ -98,42 +92,24 @@ class VpnViewModel(application: Application) : AndroidViewModel(application) {
     fun onConnectDisconnectClicked() {
         Log.d(TAG, "onConnectDisconnectClicked called. Current state: ${_vpnState.value}, Config exists: ${_preparedConfig.value != null}")
         when (_vpnState.value) {
-            Tunnel.State.DOWN, null -> {
+            VpnTunnelState.DOWN, null -> {
                 _lastErrorMessage.value = null
-                // _configStatusMessage.value = null // Cleared at the start of startConfigGenerationAndFetch or if config exists
                 configFetchRetryCount = 0
                 if (_preparedConfig.value == null) {
                     _isConnectingAfterConfigFetch.value = true
-                    // Set initial status message for config preparation
                     _configStatusMessage.value = getApplication<Application>().getString(R.string.status_preparing_config)
                     startConfigGenerationAndFetch()
                 } else {
                     _isConnectingAfterConfigFetch.value = false
-                     _configStatusMessage.value = null // Clear if we are starting with existing config
+                    _configStatusMessage.value = null
                     startVpnWithCurrentConfig()
                 }
             }
-            Tunnel.State.UP -> {
-                _isConnectingAfterConfigFetch.value = false
-                _configStatusMessage.value = null
+            VpnTunnelState.UP -> {
                 stopVpn()
             }
-            Tunnel.State.TOGGLE -> {
-                if (!_lastErrorMessage.value.isNullOrEmpty()) {
-                    Log.d(TAG, "VPN is TOGGLE but has error, attempting to reconnect/reconfigure.")
-                    _lastErrorMessage.value = null
-                    // _configStatusMessage.value = null // Cleared at start of startConfigGenerationAndFetch
-                    configFetchRetryCount = 0
-                    _isConnectingAfterConfigFetch.value = true
-                    _preparedConfig.value = null
-                     // Set initial status message for config preparation
-                    _configStatusMessage.value = getApplication<Application>().getString(R.string.status_preparing_config)
-                    startConfigGenerationAndFetch()
-                } else {
-                    Log.d(TAG, "VPN is already toggling, click ignored.")
-                    // If already toggling and no error, message should reflect processing state, which setIntermediateVpnState handles.
-                    // _configStatusMessage.value = "Processing, please wait..." // This might be set by setIntermediateVpnState
-                }
+            VpnTunnelState.TOGGLE -> {
+                Log.d(TAG, "VPN is already toggling, click ignored.")
             }
         }
     }
@@ -144,9 +120,8 @@ class VpnViewModel(application: Application) : AndroidViewModel(application) {
             var success = false
             if (configFetchRetryCount == 0) {
                 _lastErrorMessage.value = null
-                 // Initial message is set in onConnectDisconnectClicked, subsequent messages will be more specific (retrying, generating keys etc)
                 if (_configStatusMessage.value != getApplication<Application>().getString(R.string.status_preparing_config)) {
-                    _configStatusMessage.value = getApplication<Application>().getString(R.string.status_preparing_config) // Ensure it starts here if not already set
+                    _configStatusMessage.value = getApplication<Application>().getString(R.string.status_preparing_config)
                 }
             }
 
@@ -161,56 +136,44 @@ class VpnViewModel(application: Application) : AndroidViewModel(application) {
                     Log.d(TAG, "Retrying config fetch. Attempt: $currentAttempt. Delaying for $RETRY_DELAY_MS ms.")
                     delay(RETRY_DELAY_MS)
                 } else {
-                    // First attempt, message already set to "Preparing config..." or will be updated to "Generating client keys..."
-                     _configStatusMessage.value = "Generating client keys..." // More specific than "Preparing config"
+                    _configStatusMessage.value = "Contacting server..."
                 }
                 Log.d(TAG, "Starting config generation and fetch process. Attempt: $currentAttempt")
 
                 try {
-                    val newClientKeyPair = withContext(Dispatchers.Default) { KeyPair() }
-                    clientKeyPair = newClientKeyPair
-                    val clientPublicKeyForServer = newClientKeyPair.publicKey.toBase64()
-
-                    // Update status after keys are generated and before server contact
-                    _configStatusMessage.value = "Client keys generated. Contacting server..."
-                    Log.d(TAG, "Client keys generated for attempt $currentAttempt. Public Key (for server): $clientPublicKeyForServer")
-
-                    val serverDataActual: ServerConfigData? = fetchConfigFromRealApi(clientPublicKeyForServer)
+                    val serverDataActual: VlessConfig? = fetchConfigFromRealApi()
 
                     if (serverDataActual != null) {
                         Log.d(TAG, "Server data received on attempt $currentAttempt: $serverDataActual")
                         _configStatusMessage.value = "Configuration received. Preparing tunnel..."
                         val finalConfig = withContext(Dispatchers.IO) {
-                            buildClientConfig(newClientKeyPair, serverDataActual)
+                            buildClientConfig(serverDataActual)
                         }
-                        _preparedConfig.value = finalConfig
-                        _configStatusMessage.value = "Configuration ready!"
-                        Log.d(TAG, "WireGuard config prepared successfully on attempt $currentAttempt.")
+                        if (finalConfig.isNotEmpty()) {
+                            _preparedConfig.value = finalConfig
+                            _configStatusMessage.value = "Configuration ready!"
+                            Log.d(TAG, "VLESS config prepared successfully on attempt $currentAttempt.")
+                            success = true
 
-                        success = true
+                            val shouldConnectAfterThisFetch = _isConnectingAfterConfigFetch.value == true
 
-                        val shouldConnectAfterThisFetch = _isConnectingAfterConfigFetch.value == true
+                            if (shouldConnectAfterThisFetch) {
+                                Log.d(TAG, "Configuration fetched. Auto-connecting as requested...")
+                                startVpnWithCurrentConfig()
+                            } else {
+                                _configStatusMessage.value = "Configuration ready! Tap connect."
+                            }
 
-                        if (shouldConnectAfterThisFetch) {
-                            Log.d(TAG, "Configuration fetched. Auto-connecting as requested...")
-                            startVpnWithCurrentConfig() // This will set TOGGLE and then processing message via setIntermediateVpnState
+                            _isConnectingAfterConfigFetch.value = false
                         } else {
-                             _configStatusMessage.value = "Configuration ready! Tap connect."
+                            handleConfigFetchError("Failed to generate a valid config.", null, currentAttempt)
                         }
-
-                        _isConnectingAfterConfigFetch.value = false
 
                     } else {
                         Log.e(TAG, "Failed to get server configuration (serverDataActual is null) on attempt $currentAttempt.")
                         handleConfigFetchError("Failed to get server config from API.", null, currentAttempt)
                     }
 
-                } catch (e: KeyFormatException) {
-                    handleConfigFetchError("Error: Invalid key format. ${e.message}", e, currentAttempt)
-                } catch (e: BadConfigException) {
-                    handleConfigFetchError("Error: Bad config string. ${e.message}", e, currentAttempt)
-                } catch (e: IllegalArgumentException) {
-                    handleConfigFetchError("Error: Invalid argument in config. ${e.message}", e, currentAttempt)
                 } catch (e: Exception) {
                     handleConfigFetchError("Error: ${e.message ?: "Failed to get configuration"}", e, currentAttempt)
                 }
@@ -218,14 +181,13 @@ class VpnViewModel(application: Application) : AndroidViewModel(application) {
                 if (!success) {
                     configFetchRetryCount++
                 } else {
-                    configFetchRetryCount = 0 // Reset on success
+                    configFetchRetryCount = 0
                 }
             }
 
             if (!success) {
                 Log.e(TAG, "All config fetch attempts failed after $lastAttemptNumber attempts.")
                 _isConnectingAfterConfigFetch.value = false
-                // Error message already set by handleConfigFetchError on final attempt
             }
         }
     }
@@ -240,31 +202,29 @@ class VpnViewModel(application: Application) : AndroidViewModel(application) {
             _lastErrorMessage.value = fullErrorMessage
             _configStatusMessage.value = "Error: Config fetch failed after $attempt attempts. Please check connection or try later."
         } else {
-            // For intermediate errors, the message for retrying is set in the main loop
             Log.d(TAG, "handleConfigFetchError: INTERMEDIATE ATTEMPT FAILED (attempt $attempt, configFetchRetryCount $configFetchRetryCount). NOT setting _lastErrorMessage. Will retry.")
-             _configStatusMessage.value = "Config fetch attempt $attempt failed. Retrying..." // Message for UI that retry will happen
+            _configStatusMessage.value = "Config fetch attempt $attempt failed. Retrying..."
         }
     }
 
-    private suspend fun fetchConfigFromRealApi(clientPublicKeyForServer: String): ServerConfigData? {
+    private suspend fun fetchConfigFromRealApi(): VlessConfig? {
         return try {
             val client = HttpClient {
                 install(ContentNegotiation) {
                     json(Json { ignoreUnknownKeys = true })
                 }
                 install(Logging) {
-                    level = LogLevel.INFO // Changed to INFO to reduce noise for successful calls
+                    level = LogLevel.INFO
                 }
             }
             val token = API_SECRET_TOKEN
             Log.d(TAG, "Using API_SECRET_TOKEN (first 5 chars): ${token.take(5)}...")
 
-            val response: ServerConfigData = client.post("https://vpnforfriends.com:8443/api/config") {
+            val response: VlessConfig = client.post("https://vpnforfriends.com:8443/api/config") {
                 contentType(ContentType.Application.Json)
                 setBody(
                     mapOf(
-                        "token" to token,
-                        "client_public_key" to clientPublicKeyForServer
+                        "token" to token
                     )
                 )
             }.body()
@@ -277,78 +237,171 @@ class VpnViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
-    private suspend fun buildClientConfig(
-        clientKeys: KeyPair,
-        serverData: ServerConfigData,
-    ): Config {
-        val resolvedEndpointString = withContext(Dispatchers.IO) {
-            val host = serverData.serverEndpoint.split(":").first()
-            val port = serverData.serverEndpoint.split(":").last()
-            try {
-                val ip = InetAddress.getByName(host).hostAddress
-                Log.d(TAG, "Resolved hostname $host to IP $ip")
-                "$ip:$port"
-            } catch (e: Exception) {
-                Log.e(TAG, "Failed to resolve hostname $host: ${e.message}, using original endpoint", e)
-                serverData.serverEndpoint
+    private suspend fun buildClientConfig(serverData: VlessConfig): String {
+        Log.d(TAG, "Building V2Ray config from VLESS URL...")
+        try {
+            val vlessUri = URI(serverData.vlessUrl)
+            val uuid = vlessUri.userInfo
+            val address = vlessUri.host
+            val port = vlessUri.port
+
+            val resolvedAddress = try {
+                withContext(Dispatchers.IO) { InetAddress.getByName(address).hostAddress }
+            } catch (e: Exception) { address }
+
+            val queryParams = vlessUri.query?.split("&")?.associate {
+                val parts = it.split("=", limit = 2)
+                parts[0] to (if (parts.size > 1) java.net.URLDecoder.decode(parts[1], "UTF-8") else "")
+            } ?: emptyMap()
+
+            val security = queryParams["security"] ?: "none"
+            val network = queryParams["type"] ?: "tcp"
+            val encryption = queryParams["encryption"] ?: "none"
+            val sni = queryParams["sni"] ?: ""
+            val fp = queryParams["fp"] ?: "chrome"
+            val pbk = queryParams["pbk"] ?: ""
+            val sid = queryParams["sid"] ?: ""
+            val spx = queryParams["spx"] ?: "/"
+            val flow = queryParams["flow"]
+            val path = queryParams["path"] ?: vlessUri.path.takeIf { it.isNotEmpty() } ?: "/"
+
+            val safeSni = when {
+                sni.contains("google.com", ignoreCase = true) -> "www.microsoft.com"
+                sni.isNotBlank() -> sni
+                else -> "www.microsoft.com"
             }
-        }
 
-        Log.d(TAG, "Building WireGuard config with endpoint: $resolvedEndpointString, client address: ${serverData.clientAssignedAddress}, server public key: ${serverData.serverPublicKey}")
+            val config = buildJsonObject {
+                putJsonObject("log") { put("loglevel", "warning") }
 
-        val interfaceBuilder = Interface.Builder()
-            .setKeyPair(clientKeys)
-            .addAddress(InetNetwork.parse(serverData.clientAssignedAddress))
-            .setMtu(1280) // Уменьшенный MTU для совместимости
-        serverData.dnsServers.forEach { dnsString ->
-            try {
-                val dnsInetAddress = withContext(Dispatchers.IO) {
-                    InetAddress.getByName(dnsString) // Используем dnsServers из serverData
+                putJsonObject("dns") {
+                    putJsonArray("servers") { add("1.1.1.1"); add("8.8.8.8") }
                 }
-                interfaceBuilder.addDnsServer(dnsInetAddress)
-                Log.d(TAG, "Added DNS server: $dnsString")
-            } catch (e: java.net.UnknownHostException) {
-                Log.w(TAG, "Invalid or unknown DNS server host: $dnsString", e)
-            } catch (e: Exception) {
-                Log.w(TAG, "Error processing DNS server: $dnsString", e)
-            }
-        }
 
-        val peerBuilder = Peer.Builder()
-            .setPublicKey(Key.fromBase64(serverData.serverPublicKey))
-            .setEndpoint(InetEndpoint.parse(resolvedEndpointString))
-            .also { builder ->
-                serverData.allowedIps.forEach { allowedIp ->
-                    try {
-                        builder.addAllowedIp(InetNetwork.parse(allowedIp))
-                        Log.d(TAG, "Added AllowedIP: $allowedIp")
-                    } catch (e: Exception) {
-                        Log.w(TAG, "Skipping invalid allowed IP: $allowedIp", e)
+                // === INBOUNDS: ТОЛЬКО ЭТОТ БЛОК! ===
+                putJsonArray("inbounds") {
+                    add(buildJsonObject {
+                        put("tag", "tun-in")
+                        put("protocol", "dokodemo-door")
+                        put("port", 0)
+                        // listen: null → AnyIP, но порт не нужен
+                        putJsonObject("settings") {
+                            put("address", "127.0.0.1")
+                            put("port", 0)
+                            put("network", "tcp,udp")
+                            put("followRedirect", true)
+                        }
+                        putJsonObject("streamSettings") {
+                            putJsonObject("sockopt") {
+                                put("tproxy", "tproxy")
+                            }
+                        }
+                        putJsonObject("sniffing") {
+                            put("enabled", true)
+                            putJsonArray("destOverride") { add("http"); add("tls") }
+                        }
+                    })
+                }
+
+                // === OUTBOUNDS ===
+                putJsonArray("outbounds") {
+                    add(buildJsonObject {
+                        put("tag", "proxy")
+                        put("protocol", "vless")
+                        putJsonObject("settings") {
+                            putJsonArray("vnext") {
+                                add(buildJsonObject {
+                                    put("address", resolvedAddress)
+                                    put("port", port)
+                                    putJsonArray("users") {
+                                        add(buildJsonObject {
+                                            put("id", uuid)
+                                            put("encryption", encryption)
+                                            flow?.takeIf { it.isNotBlank() }?.let { put("flow", it) }
+                                        })
+                                    }
+                                })
+                            }
+                        }
+                        putJsonObject("streamSettings") {
+                            put("network", network)
+                            put("security", security)
+                            when (security) {
+                                "tls" -> putJsonObject("tlsSettings") {
+                                    put("serverName", safeSni)
+                                    put("fingerprint", fp)
+                                }
+                                "reality" -> putJsonObject("realitySettings") {
+                                    put("serverName", safeSni)
+                                    put("fingerprint", fp)
+                                    put("publicKey", pbk)
+                                    put("shortId", sid)
+                                    put("spiderX", spx)
+                                }
+                            }
+                            if (network == "ws") {
+                                putJsonObject("wsSettings") {
+                                    put("path", path)
+                                    putJsonObject("headers") { put("Host", sni.ifEmpty { address }) }
+                                }
+                            }
+                        }
+                    })
+                    add(buildJsonObject { put("tag", "direct"); put("protocol", "freedom") })
+                    add(buildJsonObject { put("tag", "block"); put("protocol", "blackhole") })
+                }
+
+                // === ROUTING ===
+                putJsonObject("routing") {
+                    put("domainStrategy", "AsIs")
+                    putJsonArray("rules") {
+                        // Локальные сети → direct (без geoip)
+                        add(buildJsonObject {
+                            put("type", "field")
+                            putJsonArray("ip") {
+                                add("10.0.0.0/8")
+                                add("172.16.0.0/12")
+                                add("192.168.0.0/16")
+                                add("fc00::/7")
+                                add("fe80::/10")
+                                add("::1/128")
+                                add("127.0.0.0/8")
+                            }
+                            put("outboundTag", "direct")
+                        })
+
+                        // Всё остальное → прокси
+                        add(buildJsonObject {
+                            put("type", "field")
+                            putJsonArray("inboundTag") { add("tun-in") }
+                            put("outboundTag", "proxy")
+                        })
                     }
                 }
+            }.toString()
+
+            Log.i(TAG, "Config generated: ${config.length} chars")
+            Log.d("FINAL_CONFIG", config)
+            return config
+
+        } catch (e: Exception) {
+            Log.e(TAG, "Config build failed", e)
+            withContext(Dispatchers.Main) {
+                _lastErrorMessage.value = "Config error: ${e.message}"
             }
-        serverData.persistentKeepalive?.let {
-            peerBuilder.setPersistentKeepalive(it)
-            Log.d(TAG, "Set PersistentKeepalive: $it")
+            return ""
         }
-
-        val config = Config.Builder()
-            .setInterface(interfaceBuilder.build())
-            .addPeer(peerBuilder.build())
-            .build()
-
-        Log.d(TAG, "WireGuard config built: ${config.toWgQuickString()}")
-        return config
     }
 
     private fun startVpnWithCurrentConfig() {
+        Log.d(TAG, "startVpnWithCurrentConfig called.")
         val currentConfig = preparedConfig.value
-        if (currentConfig == null) {
-            Log.e(TAG, "Cannot start VPN: config is null. Attempting to re-fetch.")
-            _vpnState.value = Tunnel.State.DOWN
+        if (currentConfig.isNullOrEmpty()) {
+            Log.e(TAG, "Cannot start VPN: config is null or empty. Attempting to re-fetch.")
+            _vpnState.value = VpnTunnelState.DOWN
             configFetchRetryCount = 0
             _isConnectingAfterConfigFetch.value = true
-            _configStatusMessage.value = getApplication<Application>().getString(R.string.status_preparing_config) // Reset for re-fetch
+            _configStatusMessage.value = getApplication<Application>().getString(R.string.status_preparing_config)
             startConfigGenerationAndFetch()
             return
         }
@@ -366,41 +419,50 @@ class VpnViewModel(application: Application) : AndroidViewModel(application) {
             _requestPermissionsEvent.value = Event(Unit)
             return
         }
-        Log.d(TAG, "Attempting to start VPN with current config (permissions granted). Config: ${currentConfig.toWgQuickString()}")
-        val intent = MyWgVpnService.newIntent(
+
+        Log.d(TAG, "Setting config in service and creating intent. Config length: ${currentConfig.length}")
+        VlessVpnService.setConfig(currentConfig)
+
+        val intent = VlessVpnService.newIntent(
             context = getApplication(),
-            action = MyWgVpnService.ACTION_CONNECT,
-            configString = currentConfig.toWgQuickString(),
+            action = VlessVpnService.ACTION_CONNECT,
             tunnelName = DEFAULT_TUNNEL_NAME
         )
+
         try {
+            Log.i(TAG, "Starting foreground service with ACTION_CONNECT.")
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
                 getApplication<Application>().startForegroundService(intent)
             } else {
                 getApplication<Application>().startService(intent)
             }
-            setIntermediateVpnState(Tunnel.State.TOGGLE) // This will set _configStatusMessage to "Processing..."
+            setIntermediateVpnState(VpnTunnelState.TOGGLE)
         } catch (e: Exception) {
             Log.e(TAG, "Failed to start VPN service", e)
             _lastErrorMessage.value = "Error: Could not start VPN service. ${e.message}"
-            setIntermediateVpnState(Tunnel.State.DOWN) // This will set _configStatusMessage to "VPN Disconnected"
+            setIntermediateVpnState(VpnTunnelState.DOWN)
         }
     }
 
     private fun stopVpn() {
         Log.d(TAG, "stopVpn: Stopping VPN.")
-        val intent = MyWgVpnService.newIntent(
+        if (vpnState.value != VpnTunnelState.UP) {
+            Log.w(TAG, "stopVpn called but state is not UP. Ignoring. State: ${vpnState.value}")
+            return
+        }
+        val intent = VlessVpnService.newIntent(
             context = getApplication(),
-            action = MyWgVpnService.ACTION_DISCONNECT,
+            action = VlessVpnService.ACTION_DISCONNECT,
             tunnelName = DEFAULT_TUNNEL_NAME
         )
         try {
+            Log.i(TAG, "Starting service with ACTION_DISCONNECT.")
             getApplication<Application>().startService(intent)
-            setIntermediateVpnState(Tunnel.State.TOGGLE) // This will set _configStatusMessage to "Processing..."
+            setIntermediateVpnState(VpnTunnelState.TOGGLE)
         } catch (e: Exception) {
             Log.e(TAG, "Failed to stop VPN service", e)
             _lastErrorMessage.value = "Error: Could not stop VPN service. ${e.message}"
-            setIntermediateVpnState(Tunnel.State.DOWN) // This will set _configStatusMessage to "VPN Disconnected"
+            setIntermediateVpnState(VpnTunnelState.DOWN)
         }
     }
 
@@ -411,49 +473,77 @@ class VpnViewModel(application: Application) : AndroidViewModel(application) {
         Log.d(TAG, "clearLastError: Called. _lastErrorMessage and _configStatusMessage are now null. configFetchRetryCount is 0.")
     }
 
-    fun setExternalVpnState(newState: Tunnel.State, errorMessage: String? = null) {
+    fun setExternalVpnState(newState: VpnTunnelState, errorMessage: String? = null) {
         Log.d(TAG, "setExternalVpnState: newState=$newState, current _vpnState=${_vpnState.value}, error=$errorMessage")
+
+        if (newState == _vpnState.value && errorMessage == _lastErrorMessage.value) {
+            Log.d(TAG, "setExternalVpnState: State is already the same. Ignoring.")
+            return
+        }
+
         _vpnState.value = newState
 
-        if (newState == Tunnel.State.DOWN) {
+        if (newState == VpnTunnelState.DOWN) {
             if (!errorMessage.isNullOrEmpty()) {
-                if (errorMessage.contains("retrying", ignoreCase = true)) {
-                    _configStatusMessage.value = "Connection failed, VPN service is retrying..."
-                    Log.d(TAG, "setExternalVpnState: Service reported DOWN with a 'retrying' message. _lastErrorMessage not set.")
-                } else {
-                    _lastErrorMessage.value = errorMessage
-                    _configStatusMessage.value = "VPN Disconnected: Error"
-                    Log.d(TAG, "setExternalVpnState: Service reported DOWN with a non-retrying error. _lastErrorMessage SET.")
-                }
+                _lastErrorMessage.value = errorMessage
+                _configStatusMessage.value = "VPN Disconnected: Error"
             } else {
-                // Only set to "VPN Disconnected" if no other specific status (like "Config ready! Tap connect") is more appropriate
-                if (_configStatusMessage.value?.contains("Configuration ready", ignoreCase = true) != true) {
+                if (_configStatusMessage.value?.contains("ready", ignoreCase = true) != true) {
                     _configStatusMessage.value = "VPN Disconnected"
                 }
             }
-        } else if (newState == Tunnel.State.UP) {
+        } else if (newState == VpnTunnelState.UP) {
             _lastErrorMessage.value = null
             _configStatusMessage.value = "VPN Connected"
-            Log.d(TAG, "setExternalVpnState: Service reported UP. _lastErrorMessage cleared.")
-        } else if (newState == Tunnel.State.TOGGLE) {
-             // If state becomes TOGGLE externally (e.g., service starts toggling itself after config is ready and connect is called)
-             // we might want to ensure the configStatusMessage shows "Processing..."
-             // This is already handled by setIntermediateVpnState, which is called before external state changes to TOGGLE.
         }
     }
 
-    // Called when the ViewModel itself initiates a state change to TOGGLE (e.g. before starting service)
-    fun setIntermediateVpnState(intermediateState: Tunnel.State) {
+    fun setIntermediateVpnState(intermediateState: VpnTunnelState) {
+        if (_vpnState.value == intermediateState) return
         _vpnState.value = intermediateState
-        if (intermediateState == Tunnel.State.TOGGLE) {
-            // This is the primary place to set "Processing..." when connection/disconnection starts
-            _configStatusMessage.value = getApplication<Application>().getString(R.string.status_processing) // Use string resource
-        } else if (intermediateState == Tunnel.State.DOWN && _lastErrorMessage.value == null && _preparedConfig.value == null) {
-             // If moving to DOWN, no error, and no config, it's likely after a failed config attempt or cleared state
-             // _configStatusMessage.value = "Ready to connect" // Or null, or specific instruction
-        } else if (intermediateState == Tunnel.State.DOWN && _lastErrorMessage.value == null && _preparedConfig.value != null) {
-            // If moving to DOWN, no error, but config exists (e.g. after a disconnect)
-            // _configStatusMessage.value = "Disconnected. Ready to connect."
+        if (intermediateState == VpnTunnelState.TOGGLE) {
+            _configStatusMessage.value = getApplication<Application>().getString(R.string.status_processing)
+        }
+    }
+
+    fun importConfigFromClipboard() {
+        val clipboard = getApplication<Application>().getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+        val clipData = clipboard.primaryClip
+        if (clipData != null && clipData.itemCount > 0) {
+            val vlessUrl = clipData.getItemAt(0).text?.toString()
+            if (!vlessUrl.isNullOrBlank() && vlessUrl.startsWith("vless://")) {
+                viewModelScope.launch {
+                    val config = withContext(Dispatchers.IO) {
+                        buildClientConfig(VlessConfig(vlessUrl))
+                    }
+                    if (config.isNotEmpty()) {
+                        _preparedConfig.value = config
+                        _configStatusMessage.value = "Config imported from clipboard!"
+                        _lastErrorMessage.value = null
+                    }
+                }
+            } else {
+                _configStatusMessage.value = "Clipboard does not contain a valid config."
+            }
+        } else {
+            _configStatusMessage.value = "Clipboard is empty."
+        }
+    }
+
+    fun onQrCodeScanned(qrContent: String?) {
+        if (!qrContent.isNullOrBlank() && qrContent.startsWith("vless://")) {
+            viewModelScope.launch {
+                val config = withContext(Dispatchers.IO) {
+                    buildClientConfig(VlessConfig(qrContent))
+                }
+                if (config.isNotEmpty()) {
+                    _preparedConfig.value = config
+                    _configStatusMessage.value = "Config imported from QR code!"
+                    _lastErrorMessage.value = null
+                }
+            }
+        } else {
+            _configStatusMessage.value = "Scanned QR does not contain a valid config."
         }
     }
 

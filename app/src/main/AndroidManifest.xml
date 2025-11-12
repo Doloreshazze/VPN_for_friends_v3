@@ -30,15 +30,9 @@
             </intent-filter>
         </activity>
 
-        <!-- Сервис WireGuard -->
+        <!-- VLESS VPN сервис -->
         <service
-            android:name="com.wireguard.android.backend.GoBackend$VpnService"
-            android:exported="false"
-            tools:node="merge" />
-
-        <!-- Ваш собственный VPN сервис -->
-        <service
-            android:name=".MyWgVpnService"
+            android:name=".VlessVpnService"
             android:permission="android.permission.BIND_VPN_SERVICE"
             android:exported="true">
             <intent-filter>

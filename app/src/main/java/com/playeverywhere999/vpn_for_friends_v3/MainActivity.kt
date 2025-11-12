@@ -1,11 +1,10 @@
 package com.playeverywhere999.vpn_for_friends_v3
 
-import com.playeverywhere999.vpn_for_friends_v3.util.EventObserver
 import android.Manifest
 import android.app.Activity
 import android.app.AlertDialog
 import android.content.pm.PackageManager
-import android.content.res.Configuration // <-- Добавлен импорт
+import android.content.res.Configuration
 import android.graphics.Color
 import android.net.VpnService
 import android.os.Build
@@ -23,14 +22,13 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.ui.Modifier
 import androidx.core.content.ContextCompat
-import com.playeverywhere999.vpn_for_friends_v3.ui.theme.VPN_for_friends_v3Theme
-import com.wireguard.android.backend.Tunnel
-// --- UMP SDK Imports ---
-import com.google.android.ump.ConsentForm
 import com.google.android.ump.ConsentInformation
 import com.google.android.ump.ConsentRequestParameters
 import com.google.android.ump.UserMessagingPlatform
-// --- End UMP SDK Imports ---
+import com.journeyapps.barcodescanner.ScanContract
+import com.journeyapps.barcodescanner.ScanOptions
+import com.playeverywhere999.vpn_for_friends_v3.ui.theme.VPN_for_friends_v3Theme
+import com.playeverywhere999.vpn_for_friends_v3.util.EventObserver
 
 
 class MainActivity : ComponentActivity() {
@@ -46,7 +44,7 @@ class MainActivity : ComponentActivity() {
             } else {
                 Log.w("MainActivity", "VPN permission denied by user.")
                 Toast.makeText(this, "VPN permission was denied.", Toast.LENGTH_LONG).show()
-                vpnViewModel.setExternalVpnState(Tunnel.State.DOWN, "VPN permission denied by user.")
+                vpnViewModel.setExternalVpnState(VpnTunnelState.DOWN, "VPN permission denied by user.")
             }
         }
 
@@ -59,10 +57,17 @@ class MainActivity : ComponentActivity() {
         } else {
             Log.w("MainActivity", "POST_NOTIFICATIONS permission denied by user after request.")
             Toast.makeText(this, "VPN cannot start without notification permission.", Toast.LENGTH_LONG).show()
-            vpnViewModel.setExternalVpnState(Tunnel.State.DOWN, "Notification permission denied, VPN cannot start.")
+            vpnViewModel.setExternalVpnState(VpnTunnelState.DOWN, "Notification permission denied, VPN cannot start.")
         }
     }
 
+    private val qrCodeScannerLauncher = registerForActivityResult(ScanContract()) { result ->
+        if (result.contents == null) {
+            Toast.makeText(this, "Cancelled", Toast.LENGTH_LONG).show()
+        } else {
+            vpnViewModel.onQrCodeScanned(result.contents)
+        }
+    }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -113,32 +118,32 @@ class MainActivity : ComponentActivity() {
         )
         // --- End UMP SDK ---
 
-        MyWgVpnService.tunnelStatus.observe(this) { state ->
+        VlessVpnService.tunnelStatus.observe(this) { state ->
             Log.d("MainActivity", "Service tunnelStatus changed to: $state")
-            val currentError = MyWgVpnService.vpnError.value
+            val currentError = VlessVpnService.vpnError.value
             vpnViewModel.setExternalVpnState(state, currentError)
         }
 
-        MyWgVpnService.vpnError.observe(this) { errorMessage ->
+        VlessVpnService.vpnError.observe(this) { errorMessage ->
             if (errorMessage != null) {
                 Log.d("MainActivity", "Service vpnError observed: $errorMessage")
-                val currentState = MyWgVpnService.tunnelStatus.value ?: vpnViewModel.vpnState.value ?: Tunnel.State.DOWN
+                val currentState = VlessVpnService.tunnelStatus.value ?: vpnViewModel.vpnState.value ?: VpnTunnelState.DOWN
                 vpnViewModel.setExternalVpnState(currentState, errorMessage)
             }
         }
 
-        MyWgVpnService.serviceIsRunning.observe(this) { isRunning ->
-            Log.d("MainActivity", "MyWgVpnService.serviceIsRunning: $isRunning")
+        VlessVpnService.serviceIsRunning.observe(this) { isRunning ->
+            Log.d("MainActivity", "VlessVpnService.serviceIsRunning: $isRunning")
             if (!isRunning) {
                 val vmState = vpnViewModel.vpnState.value
-                if (vmState == Tunnel.State.UP || vmState == Tunnel.State.TOGGLE) {
+                if (vmState == VpnTunnelState.UP || vmState == VpnTunnelState.TOGGLE) {
                     Log.w("MainActivity", "Service is not running, but ViewModel state is $vmState. Resetting to DOWN.")
-                    vpnViewModel.setExternalVpnState(Tunnel.State.DOWN, "VPN service stopped unexpectedly.")
+                    vpnViewModel.setExternalVpnState(VpnTunnelState.DOWN, "VPN service stopped unexpectedly.")
                 }
             }
         }
 
-        vpnViewModel.requestPermissionsEvent.observe(this, EventObserver {
+        vpnViewModel.requestPermissionsEvent.observe(this, EventObserver { 
             Log.d("MainActivity", "Received requestPermissionsEvent from ViewModel.")
             requestVpnAndNotificationPermissionsMain()
         })
@@ -146,10 +151,22 @@ class MainActivity : ComponentActivity() {
         setContent {
             VPN_for_friends_v3Theme {
                 Surface(modifier = Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.background) {
-                    MainScreen(viewModel = vpnViewModel)
+                    MainScreen(viewModel = vpnViewModel) {
+                        launchQrCodeScanner()
+                    }
                 }
             }
         }
+    }
+
+    private fun launchQrCodeScanner() {
+        val options = ScanOptions()
+        options.setDesiredBarcodeFormats(ScanOptions.QR_CODE)
+        options.setPrompt("Scan a QR code")
+        options.setCameraId(0) // Use a specific camera of the device
+        options.setBeepEnabled(false)
+        options.setBarcodeImageEnabled(true)
+        qrCodeScannerLauncher.launch(options)
     }
 
     private fun requestVpnAndNotificationPermissionsMain() {
@@ -184,7 +201,7 @@ class MainActivity : ComponentActivity() {
                         .setNegativeButton("Cancel") { dialog, _ ->
                             dialog.dismiss()
                             Toast.makeText(this, "Notification permission not granted. VPN will not start.", Toast.LENGTH_LONG).show()
-                            vpnViewModel.setExternalVpnState(Tunnel.State.DOWN, "Notification permission rationale declined, VPN not started.")
+                            vpnViewModel.setExternalVpnState(VpnTunnelState.DOWN, "Notification permission rationale declined, VPN not started.")
                         }
                         .setCancelable(false)
                         .show()

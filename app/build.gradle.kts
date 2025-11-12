@@ -27,15 +27,11 @@ android {
         versionName = "3.0"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
-        // Делаем API_SECRET_TOKEN доступным в BuildConfig
-        // getStringProperty попытается прочитать значение. Если его нет, будет использовано значение по умолчанию "DEFAULT_TOKEN_PLACEHOLDER"
-        // Важно: Если токен не будет найден в local.properties, И вы не предоставите значение по умолчанию здесь,
-        // то будет ошибка сборки, если VpnViewModel попытается получить доступ к BuildConfig.API_SECRET_TOKEN.
-        // Вы можете сделать значение по умолчанию более очевидной заглушкой или даже вызвать ошибку сборки, если токен не найден.
         val apiSecretToken: String = localProperties.getProperty("API_SECRET_TOKEN") ?: run {
             println("WARNING: API_SECRET_TOKEN not found in local.properties. Using placeholder.")
-            "MISSING_TOKEN_CHECK_LOCAL_PROPERTIES" // Это значение попадет в BuildConfig, если токен не найден
+            "MISSING_TOKEN_CHECK_LOCAL_PROPERTIES"
         }
+        // Правильное экранирование кавычек
         buildConfigField("String", "API_SECRET_TOKEN", "\"$apiSecretToken\"")
     }
 
@@ -59,19 +55,24 @@ android {
         isCoreLibraryDesugaringEnabled = true
     }
 
-    // ИЗМЕНЕНИЕ: kotlinOptions теперь не нужен, так как jvmTarget можно указать здесь
     kotlin {
         jvmToolchain(17)
     }
 
     buildFeatures {
         compose = true
-        buildConfig = true // Эта опция включает генерацию BuildConfig
+        buildConfig = true
+    }
+    sourceSets {
+        getByName("main") {
+            jniLibs.srcDirs("libs")
+        }
     }
 }
 
 dependencies {
-    // Этот блок уже идеален, оставляем его без изменений
+    implementation(files("libs/libv2ray.aar"))
+
     implementation(libs.ktor.client.android)
     implementation(libs.ktor.client.core)
     implementation(libs.ktor.client.content.negotiation)
@@ -80,8 +81,6 @@ dependencies {
     implementation(libs.kotlinx.serialization.json)
 
     implementation(libs.google.ump)
-
-    implementation(libs.wireguard.tunnel)
 
     implementation(libs.androidx.lifecycle.viewmodel.ktx)
     implementation(libs.androidx.lifecycle.viewmodel.compose)
@@ -97,6 +96,7 @@ dependencies {
     implementation(libs.androidx.activity.compose)
     implementation(libs.androidx.appcompat)
     implementation(libs.androidx.compose.runtime.livedata)
+    implementation("com.journeyapps:zxing-android-embedded:4.3.0")
 
     coreLibraryDesugaring(libs.android.desugarJdkLibs)
 
