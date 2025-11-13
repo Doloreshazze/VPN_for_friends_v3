@@ -239,6 +239,7 @@ class VpnViewModel(application: Application) : AndroidViewModel(application) {
 
     private suspend fun buildClientConfig(serverData: VlessConfig): String {
         Log.d(TAG, "Building V2Ray config from VLESS URL...")
+
         try {
             val vlessUri = URI(serverData.vlessUrl)
             val uuid = vlessUri.userInfo
@@ -257,7 +258,7 @@ class VpnViewModel(application: Application) : AndroidViewModel(application) {
             val security = queryParams["security"] ?: "none"
             val network = queryParams["type"] ?: "tcp"
             val encryption = queryParams["encryption"] ?: "none"
-            val sni = queryParams["sni"] ?: ""
+            val sniRaw = queryParams["sni"] ?: ""
             val fp = queryParams["fp"] ?: "chrome"
             val pbk = queryParams["pbk"] ?: ""
             val sid = queryParams["sid"] ?: ""
@@ -265,35 +266,61 @@ class VpnViewModel(application: Application) : AndroidViewModel(application) {
             val flow = queryParams["flow"]
             val path = queryParams["path"] ?: vlessUri.path.takeIf { it.isNotEmpty() } ?: "/"
 
+            // === ОЧИСТКА SNI ОТ ПОРТА ===
             val safeSni = when {
-                sni.contains("google.com", ignoreCase = true) -> "www.microsoft.com"
-                sni.isNotBlank() -> sni
+                sniRaw.contains("google.com", ignoreCase = true) -> "www.microsoft.com"
+                sniRaw.contains(":") -> sniRaw.substringBefore(":")
+                sniRaw.isNotBlank() -> sniRaw
                 else -> "www.microsoft.com"
             }
 
-            val config = buildJsonObject {
-                putJsonObject("log") { put("loglevel", "warning") }
+            // === ЛОГИРОВАНИЕ КЛЮЧЕВЫХ ПАРАМЕТРОВ ===
+            Log.i(TAG, "=== VLESS CONNECTION PARAMS ===")
+            Log.i(TAG, "URL: ${serverData.vlessUrl}")
+            Log.i(TAG, "UUID: $uuid")
+            Log.i(TAG, "Address: $address to $resolvedAddress")
+            Log.i(TAG, "Port: $port")
+            Log.i(TAG, "Security: $security")
+            Log.i(TAG, "Network: $network")
+            Log.i(TAG, "Raw SNI: '$sniRaw'")
+            Log.i(TAG, "Clean SNI: '$safeSni'")
+            Log.i(TAG, "Fingerprint: $fp")
+            Log.i(TAG, "Public Key: $pbk")
+            Log.i(TAG, "Short ID: $sid")
+            Log.i(TAG, "SpiderX: '$spx'")
+            Log.i(TAG, "Path: $path")
+            Log.i(TAG, "Flow: $flow")
+            Log.i(TAG, "=================================")
 
-                putJsonObject("dns") {
-                    putJsonArray("servers") { add("1.1.1.1"); add("8.8.8.8") }
+            val config = buildJsonObject {
+                putJsonObject("log") {
+                    put("loglevel", "debug")  // ← ВАЖНО: debug для логов!
                 }
 
-                // === INBOUNDS: ТОЛЬКО ЭТОТ БЛОК! ===
+                // === DNS (обязательно!) ===
+                putJsonObject("dns") {
+                    putJsonArray("servers") {
+                        add("1.1.1.1")
+                        add("8.8.8.8")
+                    }
+                }
+
+                // === INBOUNDS ===
                 putJsonArray("inbounds") {
                     add(buildJsonObject {
                         put("tag", "tun-in")
                         put("protocol", "dokodemo-door")
                         put("port", 0)
-                        // listen: null → AnyIP, но порт не нужен
                         putJsonObject("settings") {
                             put("address", "127.0.0.1")
                             put("port", 0)
                             put("network", "tcp,udp")
                             put("followRedirect", true)
+                            put("fd", 1)
                         }
                         putJsonObject("streamSettings") {
                             putJsonObject("sockopt") {
-                                put("tproxy", "tproxy")
+                                put("tproxy", "redirect")  // ← redirect, не tproxy
                             }
                         }
                         putJsonObject("sniffing") {
@@ -342,7 +369,7 @@ class VpnViewModel(application: Application) : AndroidViewModel(application) {
                             if (network == "ws") {
                                 putJsonObject("wsSettings") {
                                     put("path", path)
-                                    putJsonObject("headers") { put("Host", sni.ifEmpty { address }) }
+                                    putJsonObject("headers") { put("Host", safeSni) }
                                 }
                             }
                         }
@@ -355,7 +382,6 @@ class VpnViewModel(application: Application) : AndroidViewModel(application) {
                 putJsonObject("routing") {
                     put("domainStrategy", "AsIs")
                     putJsonArray("rules") {
-                        // Локальные сети → direct (без geoip)
                         add(buildJsonObject {
                             put("type", "field")
                             putJsonArray("ip") {
@@ -369,8 +395,6 @@ class VpnViewModel(application: Application) : AndroidViewModel(application) {
                             }
                             put("outboundTag", "direct")
                         })
-
-                        // Всё остальное → прокси
                         add(buildJsonObject {
                             put("type", "field")
                             putJsonArray("inboundTag") { add("tun-in") }
@@ -405,6 +429,7 @@ class VpnViewModel(application: Application) : AndroidViewModel(application) {
             startConfigGenerationAndFetch()
             return
         }
+
         val vpnPrepareIntent = VpnService.prepare(getApplication())
         val notificationsGranted = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
             ContextCompat.checkSelfPermission(
@@ -420,14 +445,15 @@ class VpnViewModel(application: Application) : AndroidViewModel(application) {
             return
         }
 
-        Log.d(TAG, "Setting config in service and creating intent. Config length: ${currentConfig.length}")
-        VlessVpnService.setConfig(currentConfig)
+        Log.i(TAG, "FINAL_CONFIG: $currentConfig")  // ← ВАЖНО: ВИДНО В LOGCAT
 
         val intent = VlessVpnService.newIntent(
             context = getApplication(),
             action = VlessVpnService.ACTION_CONNECT,
             tunnelName = DEFAULT_TUNNEL_NAME
-        )
+        ).apply {
+            putExtra("CONFIG", currentConfig)  // ← КОНФИГ В INTENT
+        }
 
         try {
             Log.i(TAG, "Starting foreground service with ACTION_CONNECT.")
@@ -447,7 +473,7 @@ class VpnViewModel(application: Application) : AndroidViewModel(application) {
     private fun stopVpn() {
         Log.d(TAG, "stopVpn: Stopping VPN.")
         if (vpnState.value != VpnTunnelState.UP) {
-            Log.w(TAG, "stopVpn called but state is not UP. Ignoring. State: ${vpnState.value}")
+            Log.w(TAG, "stopVpn called but state is not UP. Ignoring.")
             return
         }
         val intent = VlessVpnService.newIntent(
@@ -456,7 +482,6 @@ class VpnViewModel(application: Application) : AndroidViewModel(application) {
             tunnelName = DEFAULT_TUNNEL_NAME
         )
         try {
-            Log.i(TAG, "Starting service with ACTION_DISCONNECT.")
             getApplication<Application>().startService(intent)
             setIntermediateVpnState(VpnTunnelState.TOGGLE)
         } catch (e: Exception) {
